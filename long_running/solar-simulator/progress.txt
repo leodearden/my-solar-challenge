@@ -7,13 +7,16 @@ Last Updated: 2026-01-28
 ## Completed Features
 - SETUP-001 through SETUP-006 (all Project Setup)
 - LOC-001: Location class for Bristol
+- LOC-002: PVGIS TMY data retrieval
+- LOC-005: Irradiance data validation
+- LOC-006: Temperature data extraction
 - PV-001: PV system configuration dataclass
 - BAT-001: Battery configuration dataclass
 - FLOW-001: Self-consumption calculation
 - FLOW-002: Excess PV calculation
 - FLOW-005: Demand shortfall calculation
 
-Total: 12/62 features (19%)
+Total: 15/62 features (24%)
 
 ## Current Focus
 Implementing core simulation components
@@ -23,9 +26,11 @@ Implementing core simulation components
 
 ## Notes for Next Session
 - Core config classes (Location, PVConfig, BatteryConfig) complete
-- Energy flow calculations (self-consumption, excess, shortfall) complete
-- Next: Weather data retrieval (LOC-002, LOC-003) for PV generation
+- Weather retrieval (LOC-002) and validation (LOC-005, LOC-006) complete
+- Energy flow calculations (FLOW-001, 002, 005) complete
+- Next priority: PV-002 (pvlib ModelChain) to generate power from weather
 - Then: Battery state management (BAT-002 onwards)
+- Then: LOC-003/004 (hourly data + caching) for historical simulations
 
 ## Feature Summary
 - Total features: 62
@@ -39,14 +44,18 @@ Implementing core simulation components
 - Reorganized files to long_running/solar-simulator/ harness structure
 - Implemented SETUP-001 through SETUP-006 (project foundation)
 - Implemented LOC-001: Location class with Bristol defaults
+- Implemented LOC-002: PVGIS TMY data retrieval via pvlib
+- Implemented LOC-005: Irradiance data validation
+- Implemented LOC-006: Temperature data extraction with wind fallback
 - Implemented PV-001: PVConfig dataclass with validation
 - Implemented BAT-001: BatteryConfig dataclass with validation
 - Implemented FLOW-001, FLOW-002, FLOW-005: Core energy flow functions
-- All 41 unit tests passing
+- All 54 tests passing (unit + integration)
 - mypy strict mode passing
 
 ### Next Steps
-- LOC-002: PVGIS TMY data retrieval (requires API call)
+- LOC-003: PVGIS hourly historical data
+- LOC-004: Weather data caching
 - PV-002: pvlib PVSystem setup
 - BAT-002: State of charge tracking
 

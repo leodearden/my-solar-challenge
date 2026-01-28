@@ -107,7 +107,7 @@
             "Works for Bristol default location"
           ],
           "dependencies": ["LOC-001", "SETUP-002"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "LOC-003",
@@ -143,7 +143,7 @@
             "Raises clear error on invalid data with specific issue identified"
           ],
           "dependencies": ["LOC-002"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "LOC-006",
@@ -155,7 +155,7 @@
             "Handles missing wind data gracefully (default assumption)"
           ],
           "dependencies": ["LOC-002"],
-          "passes": false
+          "passes": true
         }
       ]
     },
