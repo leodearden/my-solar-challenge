@@ -276,7 +276,7 @@
             "SOC queryable at any time"
           ],
           "dependencies": ["BAT-001"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "BAT-003",
@@ -288,7 +288,7 @@
             "Efficiency applied during charge operations"
           ],
           "dependencies": ["BAT-002"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "BAT-004",
@@ -300,7 +300,7 @@
             "Efficiency applied during discharge operations"
           ],
           "dependencies": ["BAT-002"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "BAT-005",
@@ -313,7 +313,7 @@
             "Usable capacity = max_soc - min_soc"
           ],
           "dependencies": ["BAT-002"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "BAT-006",
@@ -326,7 +326,7 @@
             "Updates internal SOC state"
           ],
           "dependencies": ["BAT-003", "BAT-005"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "BAT-007",
@@ -339,7 +339,7 @@
             "Updates internal SOC state"
           ],
           "dependencies": ["BAT-004", "BAT-005"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "BAT-008",

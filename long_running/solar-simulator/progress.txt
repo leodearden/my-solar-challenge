@@ -12,11 +12,17 @@ Last Updated: 2026-01-28
 - LOC-006: Temperature data extraction
 - PV-001: PV system configuration dataclass
 - BAT-001: Battery configuration dataclass
+- BAT-002: State of charge tracking
+- BAT-003: Charge efficiency losses
+- BAT-004: Discharge efficiency losses
+- BAT-005: SOC limits enforcement
+- BAT-006: Charge from excess PV logic
+- BAT-007: Discharge to meet demand logic
 - FLOW-001: Self-consumption calculation
 - FLOW-002: Excess PV calculation
 - FLOW-005: Demand shortfall calculation
 
-Total: 15/62 features (24%)
+Total: 21/62 features (34%)
 
 ## Current Focus
 Implementing core simulation components
@@ -50,14 +56,16 @@ Implementing core simulation components
 - Implemented PV-001: PVConfig dataclass with validation
 - Implemented BAT-001: BatteryConfig dataclass with validation
 - Implemented FLOW-001, FLOW-002, FLOW-005: Core energy flow functions
-- All 54 tests passing (unit + integration)
+- All 74 tests passing (unit + integration)
 - mypy strict mode passing
+- Implemented complete Battery class with SOC tracking, efficiency, limits
 
 ### Next Steps
-- LOC-003: PVGIS hourly historical data
-- LOC-004: Weather data caching
-- PV-002: pvlib PVSystem setup
-- BAT-002: State of charge tracking
+- PV-002/PV-003: pvlib PVSystem and ModelChain for power calculation
+- FLOW-003/FLOW-004: Battery charge from excess, grid export
+- FLOW-006/FLOW-007: Battery discharge, grid import
+- FLOW-008: Energy balance validation
+- HOME-001: Home configuration combining all components
 
 ---
 
