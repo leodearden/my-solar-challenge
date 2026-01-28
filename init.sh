@@ -8,7 +8,11 @@ echo "=== Setting up Solar Challenge Simulator ==="
 # Create virtual environment if not exists
 if [ ! -d "venv" ]; then
     echo "Creating virtual environment..."
-    python3 -m venv venv
+    if command -v uv &> /dev/null; then
+        uv venv venv
+    else
+        python3 -m venv venv
+    fi
 fi
 
 # Activate virtual environment
@@ -16,8 +20,12 @@ source venv/bin/activate
 
 # Install dependencies
 echo "Installing dependencies..."
-pip install --upgrade pip
-pip install -r requirements.txt
+if command -v uv &> /dev/null; then
+    uv pip install -r requirements.txt
+else
+    pip install --upgrade pip
+    pip install -r requirements.txt
+fi
 
 # Run basic smoke test
 echo "Running smoke test..."
