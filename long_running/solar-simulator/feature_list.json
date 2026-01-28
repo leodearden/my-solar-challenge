@@ -95,7 +95,7 @@
             "Location is hashable and can be used as dict key"
           ],
           "dependencies": ["SETUP-001"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "LOC-002",
@@ -173,7 +173,7 @@
             "Optional name/identifier field"
           ],
           "dependencies": ["SETUP-001"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "PV-002",
@@ -264,7 +264,7 @@
             "Optional name/identifier field"
           ],
           "dependencies": ["SETUP-001"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "BAT-002",
@@ -447,7 +447,7 @@
             "All values non-negative"
           ],
           "dependencies": ["SETUP-001"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "FLOW-002",
@@ -459,7 +459,7 @@
             "All values non-negative"
           ],
           "dependencies": ["FLOW-001"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "FLOW-003",
@@ -495,7 +495,7 @@
             "All values non-negative"
           ],
           "dependencies": ["FLOW-001"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "FLOW-006",

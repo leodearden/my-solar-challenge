@@ -1,24 +1,31 @@
 # Solar Challenge Energy Flow Simulator - Progress Log
 
 ## Project Status
-Phase: Initialisation
+Phase: Implementation
 Last Updated: 2026-01-28
 
 ## Completed Features
-(None yet)
+- SETUP-001 through SETUP-006 (all Project Setup)
+- LOC-001: Location class for Bristol
+- PV-001: PV system configuration dataclass
+- BAT-001: Battery configuration dataclass
+- FLOW-001: Self-consumption calculation
+- FLOW-002: Excess PV calculation
+- FLOW-005: Demand shortfall calculation
+
+Total: 12/62 features (19%)
 
 ## Current Focus
-Setting up project foundation
+Implementing core simulation components
 
 ## Known Issues
 (None yet)
 
 ## Notes for Next Session
-- Project structure created
-- Feature list defined
-- Ready to begin implementing Priority 1 features
-- Start with: Project Setup category (SETUP-001 through SETUP-006)
-- Then proceed to: Location and Weather (LOC-001 through LOC-006)
+- Core config classes (Location, PVConfig, BatteryConfig) complete
+- Energy flow calculations (self-consumption, excess, shortfall) complete
+- Next: Weather data retrieval (LOC-002, LOC-003) for PV generation
+- Then: Battery state management (BAT-002 onwards)
 
 ## Feature Summary
 - Total features: 62
@@ -28,6 +35,23 @@ Setting up project foundation
 - Priority 3: 5 features (Configuration/Scenarios)
 
 ## Session Log
+### Session 2 - 2026-01-28 (continued)
+- Reorganized files to long_running/solar-simulator/ harness structure
+- Implemented SETUP-001 through SETUP-006 (project foundation)
+- Implemented LOC-001: Location class with Bristol defaults
+- Implemented PV-001: PVConfig dataclass with validation
+- Implemented BAT-001: BatteryConfig dataclass with validation
+- Implemented FLOW-001, FLOW-002, FLOW-005: Core energy flow functions
+- All 41 unit tests passing
+- mypy strict mode passing
+
+### Next Steps
+- LOC-002: PVGIS TMY data retrieval (requires API call)
+- PV-002: pvlib PVSystem setup
+- BAT-002: State of charge tracking
+
+---
+
 ### Session 1 - 2026-01-28
 - Created project structure
 - Defined feature_list.json with 62 features across 11 categories
