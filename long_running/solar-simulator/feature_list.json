@@ -471,7 +471,7 @@
             "Updates battery state"
           ],
           "dependencies": ["FLOW-002", "BAT-006"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "FLOW-004",
@@ -483,7 +483,7 @@
             "All values non-negative"
           ],
           "dependencies": ["FLOW-003"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "FLOW-005",
@@ -507,7 +507,7 @@
             "Updates battery state"
           ],
           "dependencies": ["FLOW-005", "BAT-007"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "FLOW-007",
@@ -519,7 +519,7 @@
             "All values non-negative"
           ],
           "dependencies": ["FLOW-006"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "FLOW-008",
@@ -531,7 +531,7 @@
             "Tolerance configurable (default 0.001 kWh)"
           ],
           "dependencies": ["FLOW-004", "FLOW-007"],
-          "passes": false
+          "passes": true
         }
       ]
     },

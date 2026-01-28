@@ -7,7 +7,11 @@ from solar_challenge.flow import (
     calculate_self_consumption,
     calculate_excess_pv,
     calculate_shortfall,
+    simulate_timestep,
+    validate_energy_balance,
+    EnergyFlowResult,
 )
+from solar_challenge.battery import Battery, BatteryConfig
 
 
 @pytest.fixture
@@ -132,3 +136,241 @@ class TestEnergyBalance:
         pd.testing.assert_series_equal(
             total, sample_demand, check_names=False, atol=1e-10
         )
+
+
+@pytest.fixture
+def default_battery():
+    """Create a default battery for testing."""
+    config = BatteryConfig.default_5kwh()
+    return Battery(config)
+
+
+class TestSimulateTimestep:
+    """Test single timestep simulation."""
+
+    def test_no_battery_excess_exports(self):
+        """Without battery, excess PV exports to grid."""
+        result = simulate_timestep(
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery=None,
+            timestep_minutes=60,
+        )
+        # 3 kW - 1 kW = 2 kW excess for 1 hour = 2 kWh export
+        assert result.generation == 3.0
+        assert result.demand == 1.0
+        assert result.self_consumption == 1.0
+        assert result.grid_export == 2.0
+        assert result.grid_import == 0.0
+        assert result.battery_charge == 0.0
+        assert result.battery_discharge == 0.0
+
+    def test_no_battery_shortfall_imports(self):
+        """Without battery, shortfall imports from grid."""
+        result = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery=None,
+            timestep_minutes=60,
+        )
+        # 3 kW - 1 kW = 2 kW shortfall for 1 hour = 2 kWh import
+        assert result.generation == 1.0
+        assert result.demand == 3.0
+        assert result.self_consumption == 1.0
+        assert result.grid_export == 0.0
+        assert result.grid_import == 2.0
+
+    def test_with_battery_excess_charges(self, default_battery):
+        """With battery, excess PV charges battery first."""
+        initial_soc = default_battery.soc_kwh
+        result = simulate_timestep(
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery=default_battery,
+            timestep_minutes=60,
+        )
+        # 2 kWh excess, battery can absorb it
+        assert result.battery_charge > 0
+        assert default_battery.soc_kwh > initial_soc
+        # Export should be reduced
+        assert result.grid_export < 2.0
+
+    def test_with_battery_shortfall_discharges(self, default_battery):
+        """With battery, shortfall discharges battery first."""
+        initial_soc = default_battery.soc_kwh
+        result = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery=default_battery,
+            timestep_minutes=60,
+        )
+        # 2 kWh shortfall, battery can provide it
+        assert result.battery_discharge > 0
+        assert default_battery.soc_kwh < initial_soc
+        # Import should be reduced
+        assert result.grid_import < 2.0
+
+
+class TestBatteryChargeFromExcess:
+    """Test battery charging from excess (FLOW-003)."""
+
+    def test_excess_directed_to_battery(self, default_battery):
+        """Excess PV is directed to battery first."""
+        result = simulate_timestep(
+            generation_kw=2.0,
+            demand_kw=0.5,
+            battery=default_battery,
+            timestep_minutes=60,
+        )
+        # 1.5 kWh excess
+        assert result.battery_charge > 0
+
+    def test_respects_battery_charge_rate(self):
+        """Charging respects battery max rate."""
+        config = BatteryConfig(capacity_kwh=10.0, max_charge_kw=1.0)
+        battery = Battery(config, initial_soc_kwh=1.0)
+
+        result = simulate_timestep(
+            generation_kw=5.0,  # Way more than 1 kW charge rate
+            demand_kw=0.0,
+            battery=battery,
+            timestep_minutes=60,
+        )
+        # Charge limited to ~1 kW * 1 hour * efficiency
+        assert result.battery_charge <= 1.0 * 0.975 + 0.01
+
+
+class TestGridExport:
+    """Test remaining excess for grid export (FLOW-004)."""
+
+    def test_export_equals_excess_minus_charged(self, default_battery):
+        """Export = excess - battery_charged."""
+        result = simulate_timestep(
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery=default_battery,
+            timestep_minutes=60,
+        )
+        excess = result.generation - result.self_consumption
+        assert result.grid_export == pytest.approx(
+            excess - result.battery_charge, rel=0.01
+        )
+
+    def test_export_when_battery_full(self):
+        """Export when battery is full."""
+        config = BatteryConfig.default_5kwh()
+        battery = Battery(config, initial_soc_kwh=4.5)  # At max SOC
+
+        result = simulate_timestep(
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery=battery,
+            timestep_minutes=60,
+        )
+        # Battery can't charge more, so all excess exports
+        assert result.battery_charge == 0.0
+        assert result.grid_export == 2.0
+
+
+class TestBatteryDischargeToMeetShortfall:
+    """Test battery discharge to meet shortfall (FLOW-006)."""
+
+    def test_shortfall_draws_from_battery(self, default_battery):
+        """Shortfall draws from battery first."""
+        result = simulate_timestep(
+            generation_kw=0.5,
+            demand_kw=2.0,
+            battery=default_battery,
+            timestep_minutes=60,
+        )
+        # 1.5 kWh shortfall
+        assert result.battery_discharge > 0
+
+    def test_respects_battery_discharge_rate(self):
+        """Discharging respects battery max rate."""
+        config = BatteryConfig(capacity_kwh=10.0, max_discharge_kw=1.0)
+        battery = Battery(config, initial_soc_kwh=5.0)
+
+        result = simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=5.0,  # Way more than 1 kW discharge rate
+            battery=battery,
+            timestep_minutes=60,
+        )
+        # Discharge limited to ~1 kW * 1 hour
+        assert result.battery_discharge <= 1.0 + 0.01
+
+
+class TestGridImport:
+    """Test grid import for remaining shortfall (FLOW-007)."""
+
+    def test_import_equals_shortfall_minus_discharged(self, default_battery):
+        """Import = shortfall - battery_discharged."""
+        result = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery=default_battery,
+            timestep_minutes=60,
+        )
+        shortfall = result.demand - result.self_consumption
+        assert result.grid_import == pytest.approx(
+            shortfall - result.battery_discharge, rel=0.01
+        )
+
+    def test_import_when_battery_empty(self):
+        """Import when battery is empty."""
+        config = BatteryConfig.default_5kwh()
+        battery = Battery(config, initial_soc_kwh=0.5)  # At min SOC
+
+        result = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery=battery,
+            timestep_minutes=60,
+        )
+        # Battery can't discharge more, so all shortfall imports
+        assert result.battery_discharge == 0.0
+        assert result.grid_import == 2.0
+
+
+class TestEnergyBalanceValidation:
+    """Test energy balance validation (FLOW-008)."""
+
+    def test_valid_balance_passes(self):
+        """Valid energy balance passes validation."""
+        result = simulate_timestep(
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery=None,
+            timestep_minutes=60,
+        )
+        assert validate_energy_balance(result)
+
+    def test_valid_balance_with_battery(self, default_battery):
+        """Valid energy balance with battery passes."""
+        result = simulate_timestep(
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery=default_battery,
+            timestep_minutes=60,
+        )
+        assert validate_energy_balance(result)
+
+    def test_configurable_tolerance(self):
+        """Tolerance is configurable."""
+        result = EnergyFlowResult(
+            generation=1.0,
+            demand=1.0,
+            self_consumption=1.0,
+            battery_charge=0.0,
+            battery_discharge=0.0,
+            grid_export=0.0001,  # Tiny imbalance
+            grid_import=0.0,
+            battery_soc=0.0,
+        )
+        # Should pass with default tolerance
+        assert validate_energy_balance(result, tolerance=0.001)
+
+        # Should fail with very tight tolerance
+        with pytest.raises(ValueError, match="balance violated"):
+            validate_energy_balance(result, tolerance=0.00001)

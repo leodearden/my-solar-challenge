@@ -1,6 +1,11 @@
 """Energy flow calculations for PV and battery systems."""
 
+from dataclasses import dataclass
+from typing import Optional
+
 import pandas as pd
+
+from solar_challenge.battery import Battery
 
 
 def calculate_self_consumption(
@@ -104,3 +109,151 @@ def calculate_shortfall(
     result = (demand - generation).clip(lower=0)
     result.name = "shortfall"
     return result
+
+
+@dataclass
+class EnergyFlowResult:
+    """Results of energy flow simulation for a single timestep.
+
+    All values in kWh for the timestep.
+    """
+
+    generation: float
+    demand: float
+    self_consumption: float
+    battery_charge: float
+    battery_discharge: float
+    grid_export: float
+    grid_import: float
+    battery_soc: float  # SOC after this timestep
+
+
+def simulate_timestep(
+    generation_kw: float,
+    demand_kw: float,
+    battery: Optional[Battery],
+    timestep_minutes: float = 1.0,
+) -> EnergyFlowResult:
+    """Simulate energy flow for a single timestep.
+
+    Energy flow priority:
+    1. PV generation meets demand directly (self-consumption)
+    2. Excess PV charges battery
+    3. Remaining excess exports to grid
+    4. Shortfall draws from battery
+    5. Remaining shortfall imports from grid
+
+    Args:
+        generation_kw: PV generation power in kW
+        demand_kw: Demand power in kW
+        battery: Battery object (or None for no battery)
+        timestep_minutes: Duration of timestep in minutes
+
+    Returns:
+        EnergyFlowResult with all energy flows in kWh
+    """
+    duration_hours = timestep_minutes / 60
+
+    # Convert power to energy for this timestep
+    generation_kwh = generation_kw * duration_hours
+    demand_kwh = demand_kw * duration_hours
+
+    # Self-consumption: min(generation, demand)
+    self_consumption_kwh = min(generation_kwh, demand_kwh)
+
+    # Calculate excess and shortfall
+    excess_kwh = max(0.0, generation_kwh - demand_kwh)
+    shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
+
+    # Initialize battery-related values
+    battery_charge_kwh = 0.0
+    battery_discharge_kwh = 0.0
+    battery_soc = 0.0
+
+    if battery is not None:
+        # Charge battery from excess
+        if excess_kwh > 0:
+            excess_power_kw = excess_kwh / duration_hours
+            battery_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
+
+        # Discharge battery to meet shortfall
+        if shortfall_kwh > 0:
+            shortfall_power_kw = shortfall_kwh / duration_hours
+            battery_discharge_kwh = battery.discharge(shortfall_power_kw, timestep_minutes)
+
+        battery_soc = battery.soc_kwh
+
+    # Calculate grid flows
+    # Export = excess - battery_charged
+    grid_export_kwh = max(0.0, excess_kwh - battery_charge_kwh)
+
+    # Import = shortfall - battery_discharged
+    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh)
+
+    return EnergyFlowResult(
+        generation=generation_kwh,
+        demand=demand_kwh,
+        self_consumption=self_consumption_kwh,
+        battery_charge=battery_charge_kwh,
+        battery_discharge=battery_discharge_kwh,
+        grid_export=grid_export_kwh,
+        grid_import=grid_import_kwh,
+        battery_soc=battery_soc,
+    )
+
+
+def validate_energy_balance(
+    result: EnergyFlowResult,
+    tolerance: float = 0.001,
+) -> bool:
+    """Validate energy balance for a timestep result.
+
+    Balance equation:
+    generation + import = consumption + export + storage_delta
+
+    Where storage_delta = battery_charge - battery_discharge (net storage)
+
+    Args:
+        result: Energy flow result to validate
+        tolerance: Allowed imbalance in kWh
+
+    Returns:
+        True if balance is valid
+
+    Raises:
+        ValueError: If balance is violated beyond tolerance
+    """
+    # Left side: energy in
+    energy_in = result.generation + result.grid_import
+
+    # Right side: energy out
+    # Note: self_consumption is part of demand that was met
+    # Net storage = charge - discharge
+    storage_delta = result.battery_charge - result.battery_discharge
+    energy_out = result.demand + result.grid_export + storage_delta
+
+    # But wait - we need to reconsider this
+    # generation + import = demand + export + (charge - discharge)
+    # This simplifies because:
+    # - self_consumption = min(gen, demand)
+    # - excess = gen - demand when positive
+    # - shortfall = demand - gen when positive
+    # - export = excess - charge
+    # - import = shortfall - discharge
+
+    # Let's verify:
+    # gen + import = demand + export + charge - discharge
+    # gen + (shortfall - discharge) = demand + (excess - charge) + charge - discharge
+    # gen + shortfall - discharge = demand + excess - charge + charge - discharge
+    # gen + shortfall = demand + excess
+    # This is true since shortfall = max(0, demand - gen) and excess = max(0, gen - demand)
+
+    imbalance = abs(energy_in - energy_out)
+
+    if imbalance > tolerance:
+        raise ValueError(
+            f"Energy balance violated: in={energy_in:.6f} kWh, out={energy_out:.6f} kWh, "
+            f"imbalance={imbalance:.6f} kWh (tolerance={tolerance} kWh)"
+        )
+
+    return True
