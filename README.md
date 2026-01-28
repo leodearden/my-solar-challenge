@@ -81,20 +81,23 @@ my-solar-challenge/
 │   ├── unit/                # Unit tests
 │   ├── integration/         # Integration tests
 │   └── conftest.py          # Shared fixtures
-├── feature_list.json        # Feature tracking
-├── claude-progress.txt      # Development progress log
+├── long_running/
+│   └── solar-simulator/     # Development harness
+│       ├── feature_list.json
+│       ├── progress.txt
+│       └── init.sh
 ├── requirements.txt         # Python dependencies
-├── init.sh                  # Setup script
+├── pyproject.toml           # Project configuration
 └── README.md
 ```
 
 ## Development
 
-This project follows test-driven development (TDD). Features are tracked in `feature_list.json` and progress is logged in `claude-progress.txt`.
+This project follows test-driven development (TDD). Features are tracked in `long_running/solar-simulator/feature_list.json` and progress is logged in `long_running/solar-simulator/progress.txt`.
 
 ### Feature Status
 
-See `feature_list.json` for the complete list of features and their implementation status.
+See `long_running/solar-simulator/feature_list.json` for the complete list of features and their implementation status.
 
 ## Data Sources
 

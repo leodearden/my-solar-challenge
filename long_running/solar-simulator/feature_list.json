@@ -17,7 +17,7 @@
             "Package can be installed in editable mode with pip install -e ."
           ],
           "dependencies": [],
-          "passes": false
+          "passes": true
         },
         {
           "id": "SETUP-002",
@@ -29,7 +29,7 @@
             "pytest imports successfully"
           ],
           "dependencies": ["SETUP-001"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "SETUP-003",
@@ -42,7 +42,7 @@
             "pytest.ini or pyproject.toml contains pytest configuration"
           ],
           "dependencies": ["SETUP-001"],
-          "passes": false
+          "passes": true
         },
         {
           "id": "SETUP-004",
@@ -54,7 +54,7 @@
             "Repository has at least one commit"
           ],
           "dependencies": [],
-          "passes": false
+          "passes": true
         },
         {
           "id": "SETUP-005",
@@ -66,7 +66,7 @@
             "README includes instructions to run tests"
           ],
           "dependencies": [],
-          "passes": false
+          "passes": true
         },
         {
           "id": "SETUP-006",
@@ -77,7 +77,7 @@
             "Strict mode enabled for new code"
           ],
           "dependencies": ["SETUP-001"],
-          "passes": false
+          "passes": true
         }
       ]
     },
