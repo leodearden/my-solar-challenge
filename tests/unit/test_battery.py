@@ -246,3 +246,63 @@ class TestBatteryDischargeToMeetDemand:
         energy = default_battery.discharge(power_kw=1.0, duration_minutes=60)
         assert isinstance(energy, float)
         assert energy >= 0
+
+
+class TestBatterySOCTimeSeries:
+    """Test SOC time series output (BAT-008)."""
+
+    def test_soc_history_tracking(self, default_config):
+        """Battery can provide SOC history over multiple timesteps."""
+        battery = Battery(default_config)
+        soc_history = [battery.soc_kwh]
+
+        # Simulate several charge/discharge cycles
+        battery.charge(power_kw=1.0, duration_minutes=60)
+        soc_history.append(battery.soc_kwh)
+
+        battery.charge(power_kw=1.0, duration_minutes=60)
+        soc_history.append(battery.soc_kwh)
+
+        battery.discharge(power_kw=2.0, duration_minutes=60)
+        soc_history.append(battery.soc_kwh)
+
+        # Verify history is tracked correctly
+        assert len(soc_history) == 4
+        assert all(isinstance(s, float) for s in soc_history)
+        assert soc_history[1] > soc_history[0]  # Charged
+        assert soc_history[2] > soc_history[1]  # Charged more
+        assert soc_history[3] < soc_history[2]  # Discharged
+
+    def test_soc_kwh_always_queryable(self, default_battery):
+        """SOC in kWh is always queryable."""
+        assert hasattr(default_battery, 'soc_kwh')
+        assert isinstance(default_battery.soc_kwh, float)
+
+    def test_soc_fraction_queryable(self, default_battery):
+        """SOC as fraction is queryable."""
+        assert hasattr(default_battery, 'soc_fraction')
+        assert isinstance(default_battery.soc_fraction, float)
+        assert 0 <= default_battery.soc_fraction <= 1
+
+    def test_soc_percentage_calculation(self, default_config):
+        """SOC percentage can be calculated from fraction."""
+        battery = Battery(default_config, initial_soc_kwh=2.5)  # 50% of 5 kWh
+        percentage = battery.soc_fraction * 100
+        assert percentage == pytest.approx(50.0, rel=0.01)
+
+    def test_soc_recorded_at_each_timestep(self, default_config):
+        """SOC is available after each operation."""
+        battery = Battery(default_config, initial_soc_kwh=2.0)
+
+        # 60 one-minute timesteps
+        soc_values = []
+        for i in range(60):
+            # Alternate charge/discharge
+            if i % 2 == 0:
+                battery.charge(power_kw=0.5, duration_minutes=1)
+            else:
+                battery.discharge(power_kw=0.3, duration_minutes=1)
+            soc_values.append(battery.soc_kwh)
+
+        assert len(soc_values) == 60
+        assert all(0.5 <= s <= 4.5 for s in soc_values)  # Within limits

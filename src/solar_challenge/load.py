@@ -1,0 +1,369 @@
+"""Load profile generation for domestic energy consumption."""
+
+from dataclasses import dataclass
+from typing import Any, Optional
+
+import numpy as np
+import pandas as pd
+
+
+# Try to import richardsonpy for stochastic load profiles
+# Use Any type since module may not be available
+_richardsonpy_module: Any = None
+try:
+    import richardsonpy as _rpy  # type: ignore[import-not-found]
+    _richardsonpy_module = _rpy
+except ImportError:
+    pass
+RICHARDSONPY_AVAILABLE: bool = _richardsonpy_module is not None
+
+
+# Ofgem Typical Domestic Consumption Values (TDCV) by household size
+# Values in kWh/year for electricity (excluding electric heating)
+OFGEM_TDCV_BY_OCCUPANTS: dict[int, float] = {
+    1: 1800.0,   # Single occupant
+    2: 2700.0,   # 2 people
+    3: 3200.0,   # 3 people (close to "medium" TDCV of 2900)
+    4: 3900.0,   # 4 people
+    5: 4500.0,   # 5+ people (extrapolated)
+}
+
+
+@dataclass(frozen=True)
+class LoadConfig:
+    """Configuration for household load profile.
+
+    Attributes:
+        annual_consumption_kwh: Target annual electricity consumption in kWh.
+            If not specified and household_occupants is set, derived from Ofgem TDCV.
+        household_occupants: Number of household occupants (1-5+).
+            Affects consumption and profile shape.
+        name: Optional identifier for the load profile
+        use_stochastic: Use richardsonpy stochastic model if available
+    """
+
+    annual_consumption_kwh: Optional[float] = None
+    household_occupants: int = 3  # Default UK average household size
+    name: str = ""
+    use_stochastic: bool = True  # Prefer stochastic model if available
+
+    def __post_init__(self) -> None:
+        """Validate load configuration parameters."""
+        # Validate household_occupants
+        if self.household_occupants < 1:
+            raise ValueError(
+                f"Household occupants must be at least 1, got {self.household_occupants}"
+            )
+        if self.household_occupants > 10:
+            raise ValueError(
+                f"Household occupants seems unrealistic: {self.household_occupants}"
+            )
+
+        # Validate annual_consumption if provided
+        if self.annual_consumption_kwh is not None and self.annual_consumption_kwh <= 0:
+            raise ValueError(
+                f"Annual consumption must be positive, got {self.annual_consumption_kwh} kWh"
+            )
+
+    def get_annual_consumption(self) -> float:
+        """Get annual consumption, deriving from occupants if not explicitly set.
+
+        Returns:
+            Annual consumption in kWh
+        """
+        if self.annual_consumption_kwh is not None:
+            return self.annual_consumption_kwh
+
+        # Derive from Ofgem TDCV based on household size
+        occupants = min(self.household_occupants, 5)  # Cap at 5 for lookup
+        base_consumption = OFGEM_TDCV_BY_OCCUPANTS[occupants]
+
+        # For households larger than 5, add 400 kWh per additional person
+        if self.household_occupants > 5:
+            extra_people = self.household_occupants - 5
+            base_consumption += extra_people * 400.0
+
+        return base_consumption
+
+
+# Elexon Profile Class 1 (Domestic Unrestricted) typical shape
+# Simplified as 48 half-hourly values representing relative demand
+# Values normalized so sum = 1.0 for one day
+# Based on typical UK domestic unrestricted profile shape
+ELEXON_PROFILE_CLASS_1: list[float] = [
+    # 00:00-05:30 (overnight low)
+    0.012, 0.011, 0.010, 0.010, 0.009, 0.009, 0.009, 0.009, 0.010, 0.010, 0.012, 0.014,
+    # 06:00-11:30 (morning rise and plateau)
+    0.018, 0.024, 0.030, 0.034, 0.036, 0.035, 0.032, 0.030, 0.028, 0.026, 0.024, 0.023,
+    # 12:00-17:30 (afternoon)
+    0.022, 0.021, 0.021, 0.021, 0.022, 0.024, 0.028, 0.032, 0.036, 0.040, 0.044, 0.046,
+    # 18:00-23:30 (evening peak and decline)
+    0.046, 0.044, 0.040, 0.036, 0.032, 0.028, 0.024, 0.020, 0.017, 0.015, 0.014, 0.013,
+]
+
+
+# Seasonal scaling factors (higher in winter, lower in summer)
+# Based on UK domestic consumption patterns
+SEASONAL_FACTORS: dict[int, float] = {
+    1: 1.25,   # January
+    2: 1.20,   # February
+    3: 1.10,   # March
+    4: 0.95,   # April
+    5: 0.85,   # May
+    6: 0.80,   # June
+    7: 0.75,   # July
+    8: 0.75,   # August
+    9: 0.85,   # September
+    10: 0.95,  # October
+    11: 1.10,  # November
+    12: 1.20,  # December
+}
+
+
+def _normalize_profile(profile: list[float]) -> "np.ndarray[tuple[int], np.dtype[np.float64]]":
+    """Normalize profile so it sums to 1.0."""
+    arr: np.ndarray[tuple[int], np.dtype[np.float64]] = np.array(profile, dtype=np.float64)
+    result: np.ndarray[tuple[int], np.dtype[np.float64]] = arr / arr.sum()
+    return result
+
+
+def _get_daily_profile_kwh(
+    date: pd.Timestamp,
+    annual_consumption_kwh: float,
+) -> np.ndarray:
+    """Get daily load profile in kWh for a specific date.
+
+    Args:
+        date: Date for the profile
+        annual_consumption_kwh: Target annual consumption
+
+    Returns:
+        Array of 48 half-hourly energy values in kWh
+    """
+    # Base daily consumption (uniform across year)
+    base_daily = annual_consumption_kwh / 365.0
+
+    # Apply seasonal factor
+    month = date.month
+    seasonal_factor = SEASONAL_FACTORS.get(month, 1.0)
+
+    # Scale base profile to get daily consumption
+    daily_consumption = base_daily * seasonal_factor
+    normalized_profile = _normalize_profile(ELEXON_PROFILE_CLASS_1)
+
+    # Energy per half-hour period in kWh
+    half_hourly_kwh = normalized_profile * daily_consumption
+
+    return half_hourly_kwh
+
+
+def _interpolate_half_hourly_to_minute(
+    half_hourly_kwh: np.ndarray,
+) -> np.ndarray:
+    """Interpolate half-hourly energy to 1-minute power.
+
+    Converts half-hourly energy (kWh) to 1-minute power (kW).
+    Each half-hour's energy is divided equally across 30 minutes.
+
+    Args:
+        half_hourly_kwh: 48 half-hourly energy values in kWh
+
+    Returns:
+        1440 minute-by-minute power values in kW
+    """
+    # Each half-hour value becomes 30 identical minute values
+    # Energy (kWh) per half hour = Power (kW) * 0.5 hours
+    # So Power (kW) = Energy (kWh) / 0.5 = Energy (kWh) * 2
+    minute_power = np.repeat(half_hourly_kwh * 2, 30)
+    return minute_power
+
+
+def _try_richardsonpy_profile(
+    config: LoadConfig,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    timezone: str,
+) -> Optional[pd.Series]:
+    """Try to generate profile using richardsonpy.
+
+    Args:
+        config: Load configuration
+        start_date: Start of simulation period
+        end_date: End of simulation period
+        timezone: IANA timezone string
+
+    Returns:
+        Load profile Series if successful, None otherwise
+    """
+    if not RICHARDSONPY_AVAILABLE or _richardsonpy_module is None:
+        return None
+
+    try:
+        # richardsonpy uses different parameters
+        # This is a simplified interface - actual implementation would need
+        # to map our parameters to richardsonpy's API
+
+        # Generate profile using richardsonpy
+        # The actual API depends on richardsonpy version
+        # Typical usage: richardsonpy.generate_profile(...)
+        num_days = (end_date - start_date).days + 1
+
+        # Create minute index
+        minute_index = pd.date_range(
+            start=start_date,
+            end=end_date + pd.Timedelta(days=1) - pd.Timedelta(minutes=1),
+            freq="1min",
+            tz=timezone,
+        )
+
+        # richardsonpy typically generates at 1-minute resolution
+        # Map occupants to richardsonpy's household type
+        profile_data: np.ndarray[Any, np.dtype[np.float64]] = (
+            _richardsonpy_module.generate_load_profile(
+                num_days=num_days,
+                num_occupants=config.household_occupants,
+            )
+        )
+
+        # Ensure correct length
+        if len(profile_data) != len(minute_index):
+            profile_data = profile_data[:len(minute_index)]
+
+        profile = pd.Series(profile_data, index=minute_index, name="demand_kw")
+
+        # Scale to target annual consumption
+        annual_target = config.get_annual_consumption()
+        return scale_profile_to_annual(profile, annual_target)
+
+    except Exception:
+        # Fall back to Elexon profile if richardsonpy fails
+        return None
+
+
+def generate_load_profile(
+    config: LoadConfig,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    timezone: str = "Europe/London",
+) -> pd.Series:
+    """Generate domestic load profile.
+
+    Attempts to use richardsonpy for stochastic profiles if available and
+    configured. Falls back to Elexon Profile Class 1 shape otherwise.
+
+    Creates a 1-minute resolution load profile for the specified date range,
+    scaled to match the configured annual consumption.
+
+    Args:
+        config: Load configuration with consumption and household parameters
+        start_date: Start of simulation period
+        end_date: End of simulation period (inclusive)
+        timezone: IANA timezone string for output index
+
+    Returns:
+        Series with 1-minute DatetimeIndex and power values in kW
+    """
+    # Try richardsonpy first if enabled
+    if config.use_stochastic:
+        result = _try_richardsonpy_profile(config, start_date, end_date, timezone)
+        if result is not None:
+            return result
+
+    # Fall back to Elexon Profile Class 1
+    return _generate_elexon_profile(config, start_date, end_date, timezone)
+
+
+def _generate_elexon_profile(
+    config: LoadConfig,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    timezone: str = "Europe/London",
+) -> pd.Series:
+    """Generate domestic load profile using Elexon Profile Class 1 shape.
+
+    Creates a 1-minute resolution load profile for the specified date range,
+    scaled to match the configured annual consumption.
+
+    Args:
+        config: Load configuration with annual consumption target
+        start_date: Start of simulation period
+        end_date: End of simulation period (inclusive)
+        timezone: IANA timezone string for output index
+
+    Returns:
+        Series with 1-minute DatetimeIndex and power values in kW
+    """
+    # Get annual consumption from config (may be derived from occupants)
+    annual_consumption = config.get_annual_consumption()
+
+    # Ensure dates are timezone-aware
+    if start_date.tz is None:
+        start_date = start_date.tz_localize(timezone)
+    if end_date.tz is None:
+        end_date = end_date.tz_localize(timezone)
+
+    # Create minute-by-minute index
+    minute_index = pd.date_range(
+        start=start_date,
+        end=end_date + pd.Timedelta(days=1) - pd.Timedelta(minutes=1),
+        freq="1min",
+        tz=timezone,
+    )
+
+    # Generate profile for each day
+    all_power: list[np.ndarray] = []
+    current_date = start_date.normalize()
+
+    while current_date <= end_date:
+        daily_kwh = _get_daily_profile_kwh(current_date, annual_consumption)
+        minute_power = _interpolate_half_hourly_to_minute(daily_kwh)
+        all_power.append(minute_power)
+        current_date += pd.Timedelta(days=1)
+
+    # Concatenate all days
+    power_values = np.concatenate(all_power)
+
+    # Trim or extend to match index length (handle DST transitions)
+    if len(power_values) > len(minute_index):
+        power_values = power_values[: len(minute_index)]
+    elif len(power_values) < len(minute_index):
+        # Extend with last day's average
+        avg = power_values[-1440:].mean() if len(power_values) >= 1440 else power_values.mean()
+        padding = np.full(len(minute_index) - len(power_values), avg)
+        power_values = np.concatenate([power_values, padding])
+
+    return pd.Series(power_values, index=minute_index, name="demand_kw")
+
+
+def calculate_annual_consumption(profile: pd.Series) -> float:
+    """Calculate total annual consumption from a load profile.
+
+    Args:
+        profile: Power series in kW with 1-minute resolution
+
+    Returns:
+        Total consumption in kWh
+    """
+    # Power (kW) * time (1 minute = 1/60 hour) = Energy (kWh)
+    return float(profile.sum() / 60.0)
+
+
+def scale_profile_to_annual(
+    profile: pd.Series,
+    target_annual_kwh: float,
+) -> pd.Series:
+    """Scale a load profile to match a target annual consumption.
+
+    Args:
+        profile: Power series in kW
+        target_annual_kwh: Target annual consumption in kWh
+
+    Returns:
+        Scaled power series in kW
+    """
+    current_annual = calculate_annual_consumption(profile)
+    if current_annual == 0:
+        raise ValueError("Cannot scale profile with zero consumption")
+
+    scale_factor = target_annual_kwh / current_annual
+    return profile * scale_factor

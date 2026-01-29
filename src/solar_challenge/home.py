@@ -1,0 +1,289 @@
+"""Single home simulation combining PV, battery, and load."""
+
+from dataclasses import dataclass
+from typing import Optional
+
+import pandas as pd
+
+from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
+from solar_challenge.load import LoadConfig, generate_load_profile
+from solar_challenge.location import Location
+from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
+from solar_challenge.weather import get_tmy_data
+
+
+@dataclass(frozen=True)
+class HomeConfig:
+    """Configuration for a single home simulation.
+
+    Attributes:
+        pv_config: PV system configuration
+        load_config: Load profile configuration
+        battery_config: Battery configuration (None for PV-only)
+        location: Geographic location for weather data
+        name: Optional identifier for the home
+    """
+
+    pv_config: PVConfig
+    load_config: LoadConfig
+    battery_config: Optional[BatteryConfig] = None
+    location: Location = Location.bristol()
+    name: str = ""
+
+
+@dataclass
+class SimulationResults:
+    """Comprehensive results from a home simulation.
+
+    All time series have 1-minute resolution and matching DatetimeIndex.
+
+    Attributes:
+        generation: PV generation in kW
+        demand: Load demand in kW
+        self_consumption: Direct PV consumption in kW
+        battery_charge: Power into battery in kW
+        battery_discharge: Power out of battery in kW
+        battery_soc: Battery state of charge in kWh
+        grid_import: Power imported from grid in kW
+        grid_export: Power exported to grid in kW
+    """
+
+    generation: pd.Series
+    demand: pd.Series
+    self_consumption: pd.Series
+    battery_charge: pd.Series
+    battery_discharge: pd.Series
+    battery_soc: pd.Series
+    grid_import: pd.Series
+    grid_export: pd.Series
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Convert results to DataFrame.
+
+        Returns:
+            DataFrame with all time series as columns
+        """
+        return pd.DataFrame({
+            "generation_kw": self.generation,
+            "demand_kw": self.demand,
+            "self_consumption_kw": self.self_consumption,
+            "battery_charge_kw": self.battery_charge,
+            "battery_discharge_kw": self.battery_discharge,
+            "battery_soc_kwh": self.battery_soc,
+            "grid_import_kw": self.grid_import,
+            "grid_export_kw": self.grid_export,
+        })
+
+
+@dataclass
+class SummaryStatistics:
+    """Summary statistics for a simulation period.
+
+    All energy values in kWh.
+    """
+
+    total_generation_kwh: float
+    total_demand_kwh: float
+    total_self_consumption_kwh: float
+    total_grid_import_kwh: float
+    total_grid_export_kwh: float
+    total_battery_charge_kwh: float
+    total_battery_discharge_kwh: float
+    peak_generation_kw: float
+    peak_demand_kw: float
+    self_consumption_ratio: float  # self_consumption / generation
+    grid_dependency_ratio: float  # grid_import / demand
+    export_ratio: float  # grid_export / generation
+    simulation_days: int
+
+
+def simulate_home(
+    config: HomeConfig,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    validate_balance: bool = True,
+) -> SimulationResults:
+    """Simulate a single home for a date range.
+
+    Args:
+        config: Home configuration with PV, load, and optional battery
+        start_date: Start of simulation period
+        end_date: End of simulation period (inclusive)
+        validate_balance: Whether to validate energy balance each timestep
+
+    Returns:
+        SimulationResults with all time series at 1-minute resolution
+    """
+    # Get weather data (TMY for now)
+    weather_data = get_tmy_data(config.location)
+
+    # Generate PV output at hourly resolution
+    hourly_generation = simulate_pv_output(
+        config.pv_config,
+        config.location,
+        weather_data,
+    )
+
+    # Interpolate to 1-minute resolution
+    minute_generation = interpolate_to_minute_resolution(hourly_generation)
+
+    # Generate load profile at 1-minute resolution
+    minute_demand = generate_load_profile(
+        config.load_config,
+        start_date,
+        end_date,
+        timezone=config.location.timezone,
+    )
+
+    # Align generation to demand index (TMY data may have different dates)
+    # TMY data uses a synthetic year, so we map by time-of-year
+    aligned_generation = _align_tmy_to_demand(minute_generation, minute_demand)
+
+    # Create battery if configured
+    battery: Optional[Battery] = None
+    if config.battery_config is not None:
+        battery = Battery(config.battery_config)
+
+    # Run timestep simulation
+    results_list: list[EnergyFlowResult] = []
+
+    for gen_kw, dem_kw in zip(aligned_generation, minute_demand, strict=True):
+        result = simulate_timestep(
+            generation_kw=float(gen_kw),
+            demand_kw=float(dem_kw),
+            battery=battery,
+            timestep_minutes=1.0,
+        )
+
+        if validate_balance:
+            validate_energy_balance(result)
+
+        results_list.append(result)
+
+    # Convert results to time series
+    index = minute_demand.index
+
+    # Convert energy (kWh) back to power (kW) for 1-minute timesteps
+    # Energy in kWh for 1 minute = Power in kW * (1/60) hours
+    # So Power in kW = Energy in kWh * 60
+    conversion_factor = 60.0
+
+    return SimulationResults(
+        generation=pd.Series(
+            [r.generation * conversion_factor for r in results_list],
+            index=index,
+            name="generation_kw",
+        ),
+        demand=pd.Series(
+            [r.demand * conversion_factor for r in results_list],
+            index=index,
+            name="demand_kw",
+        ),
+        self_consumption=pd.Series(
+            [r.self_consumption * conversion_factor for r in results_list],
+            index=index,
+            name="self_consumption_kw",
+        ),
+        battery_charge=pd.Series(
+            [r.battery_charge * conversion_factor for r in results_list],
+            index=index,
+            name="battery_charge_kw",
+        ),
+        battery_discharge=pd.Series(
+            [r.battery_discharge * conversion_factor for r in results_list],
+            index=index,
+            name="battery_discharge_kw",
+        ),
+        battery_soc=pd.Series(
+            [r.battery_soc for r in results_list],
+            index=index,
+            name="battery_soc_kwh",
+        ),
+        grid_import=pd.Series(
+            [r.grid_import * conversion_factor for r in results_list],
+            index=index,
+            name="grid_import_kw",
+        ),
+        grid_export=pd.Series(
+            [r.grid_export * conversion_factor for r in results_list],
+            index=index,
+            name="grid_export_kw",
+        ),
+    )
+
+
+def _align_tmy_to_demand(
+    tmy_generation: pd.Series,
+    demand: pd.Series,
+) -> pd.Series:
+    """Align TMY generation data to demand index by time-of-year.
+
+    TMY data has a synthetic year (often 2024 or similar), but we need
+    to map it to the actual simulation dates. We do this by matching
+    month-day-hour-minute.
+
+    Args:
+        tmy_generation: Generation series with TMY dates
+        demand: Demand series with actual simulation dates
+
+    Returns:
+        Generation series reindexed to match demand index
+    """
+    # Create a time-of-year key for TMY data (month, day, hour, minute)
+    tmy_keys = tmy_generation.index.strftime("%m-%d %H:%M")
+    tmy_lookup = dict(zip(tmy_keys, tmy_generation.values, strict=False))
+
+    # Map demand timestamps to TMY values
+    demand_keys = demand.index.strftime("%m-%d %H:%M")
+    aligned_values = [tmy_lookup.get(key, 0.0) for key in demand_keys]
+
+    return pd.Series(aligned_values, index=demand.index, name="generation_kw")
+
+
+def calculate_summary(results: SimulationResults) -> SummaryStatistics:
+    """Calculate summary statistics from simulation results.
+
+    Args:
+        results: Simulation results with time series
+
+    Returns:
+        SummaryStatistics with totals and ratios
+    """
+    # Convert power (kW) to energy (kWh) - 1 minute = 1/60 hour
+    minutes_to_hours = 1 / 60
+
+    total_gen = float(results.generation.sum() * minutes_to_hours)
+    total_demand = float(results.demand.sum() * minutes_to_hours)
+    total_self = float(results.self_consumption.sum() * minutes_to_hours)
+    total_import = float(results.grid_import.sum() * minutes_to_hours)
+    total_export = float(results.grid_export.sum() * minutes_to_hours)
+    total_charge = float(results.battery_charge.sum() * minutes_to_hours)
+    total_discharge = float(results.battery_discharge.sum() * minutes_to_hours)
+
+    peak_gen = float(results.generation.max())
+    peak_demand = float(results.demand.max())
+
+    # Calculate ratios with zero-division protection
+    self_consumption_ratio = total_self / total_gen if total_gen > 0 else 0.0
+    grid_dependency_ratio = total_import / total_demand if total_demand > 0 else 0.0
+    export_ratio = total_export / total_gen if total_gen > 0 else 0.0
+
+    # Calculate simulation duration
+    sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
+
+    return SummaryStatistics(
+        total_generation_kwh=total_gen,
+        total_demand_kwh=total_demand,
+        total_self_consumption_kwh=total_self,
+        total_grid_import_kwh=total_import,
+        total_grid_export_kwh=total_export,
+        total_battery_charge_kwh=total_charge,
+        total_battery_discharge_kwh=total_discharge,
+        peak_generation_kw=peak_gen,
+        peak_demand_kw=peak_demand,
+        self_consumption_ratio=self_consumption_ratio,
+        grid_dependency_ratio=grid_dependency_ratio,
+        export_ratio=export_ratio,
+        simulation_days=sim_days,
+    )

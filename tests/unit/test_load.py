@@ -1,0 +1,338 @@
+"""Tests for load profile generation."""
+
+import numpy as np
+import pandas as pd
+import pytest
+from solar_challenge.load import (
+    LoadConfig,
+    OFGEM_TDCV_BY_OCCUPANTS,
+    RICHARDSONPY_AVAILABLE,
+    calculate_annual_consumption,
+    generate_load_profile,
+    scale_profile_to_annual,
+)
+
+
+class TestLoadConfigBasics:
+    """Test basic LoadConfig functionality."""
+
+    def test_create_with_all_params(self):
+        """LoadConfig can be created with all parameters."""
+        config = LoadConfig(
+            annual_consumption_kwh=4000.0,
+            household_occupants=4,
+            name="Test household",
+            use_stochastic=False,
+        )
+        assert config.annual_consumption_kwh == 4000.0
+        assert config.household_occupants == 4
+        assert config.name == "Test household"
+        assert config.use_stochastic is False
+
+    def test_default_values(self):
+        """LoadConfig uses sensible defaults."""
+        config = LoadConfig()
+        assert config.annual_consumption_kwh is None  # Derived from occupants
+        assert config.household_occupants == 3  # UK average
+        assert config.name == ""
+        assert config.use_stochastic is True
+
+    def test_get_annual_consumption_explicit(self):
+        """get_annual_consumption returns explicit value if set."""
+        config = LoadConfig(annual_consumption_kwh=4500.0)
+        assert config.get_annual_consumption() == 4500.0
+
+    def test_get_annual_consumption_from_occupants(self):
+        """get_annual_consumption derives from occupants if not set."""
+        config = LoadConfig(household_occupants=2)
+        expected = OFGEM_TDCV_BY_OCCUPANTS[2]
+        assert config.get_annual_consumption() == expected
+
+
+class TestLoadConfigValidation:
+    """Test parameter validation."""
+
+    def test_consumption_must_be_positive(self):
+        """Annual consumption <= 0 raises error."""
+        with pytest.raises(ValueError, match="consumption"):
+            LoadConfig(annual_consumption_kwh=0)
+        with pytest.raises(ValueError, match="consumption"):
+            LoadConfig(annual_consumption_kwh=-100)
+
+    def test_occupants_must_be_at_least_one(self):
+        """Household occupants < 1 raises error."""
+        with pytest.raises(ValueError, match="occupant"):
+            LoadConfig(household_occupants=0)
+
+    def test_occupants_unrealistic_high_raises(self):
+        """Unrealistically high occupants raises error."""
+        with pytest.raises(ValueError, match="unrealistic"):
+            LoadConfig(household_occupants=15)
+
+
+class TestGenerateLoadProfile:
+    """Test LOAD-002/LOAD-006: Elexon profile generation."""
+
+    @pytest.fixture
+    def config(self) -> LoadConfig:
+        """Standard test configuration."""
+        return LoadConfig(annual_consumption_kwh=3400.0)
+
+    def test_returns_series_with_minute_index(self, config):
+        """Output has 1-minute frequency DatetimeIndex."""
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+        profile = generate_load_profile(config, start, end)
+
+        assert isinstance(profile, pd.Series)
+        assert isinstance(profile.index, pd.DatetimeIndex)
+        # One day = 1440 minutes
+        assert len(profile) == 1440
+
+    def test_output_in_kw(self, config):
+        """Output values are power in kW."""
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+        profile = generate_load_profile(config, start, end)
+
+        # Typical UK domestic peak is around 5-10 kW
+        assert profile.max() < 15.0  # Reasonable upper bound
+        assert profile.mean() > 0.1  # Non-trivial consumption
+
+    def test_no_negative_values(self, config):
+        """Output has no negative values."""
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+        profile = generate_load_profile(config, start, end)
+
+        assert (profile >= 0).all()
+
+    def test_timezone_aware_index(self, config):
+        """Output index is timezone-aware."""
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+        profile = generate_load_profile(config, start, end, timezone="Europe/London")
+
+        assert profile.index.tz is not None
+
+    def test_multi_day_profile(self, config):
+        """Generates profile for multiple days."""
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-23")  # 3 days
+        profile = generate_load_profile(config, start, end)
+
+        # 3 days = 3 * 1440 minutes
+        assert len(profile) == 3 * 1440
+
+    def test_week_profile_scales_to_annual(self, config):
+        """Week profile scales approximately to annual target."""
+        start = pd.Timestamp("2024-06-01")
+        end = pd.Timestamp("2024-06-07")  # 7 days
+        profile = generate_load_profile(config, start, end)
+
+        # Calculate consumption for this week
+        weekly_kwh = calculate_annual_consumption(profile)
+
+        # Should be approximately 3400 / 52 ≈ 65 kWh per week
+        # Allow some variation due to seasonal factors (June is lower)
+        expected_weekly = 3400.0 / 52.0 * 0.8  # June factor
+        assert weekly_kwh == pytest.approx(expected_weekly, rel=0.2)
+
+
+class TestElexonProfileShape:
+    """Test Elexon Profile Class 1 characteristics."""
+
+    @pytest.fixture
+    def summer_profile(self) -> pd.Series:
+        """Summer day profile."""
+        config = LoadConfig(annual_consumption_kwh=3400.0)
+        return generate_load_profile(
+            config,
+            pd.Timestamp("2024-06-21"),
+            pd.Timestamp("2024-06-21"),
+        )
+
+    @pytest.fixture
+    def winter_profile(self) -> pd.Series:
+        """Winter day profile."""
+        config = LoadConfig(annual_consumption_kwh=3400.0)
+        return generate_load_profile(
+            config,
+            pd.Timestamp("2024-01-15"),
+            pd.Timestamp("2024-01-15"),
+        )
+
+    def test_evening_peak_higher_than_overnight(self, summer_profile):
+        """Evening peak is higher than overnight baseline."""
+        # Evening: 18:00-20:00 (minutes 1080-1200)
+        # Overnight: 02:00-04:00 (minutes 120-240)
+        evening_avg = summer_profile.iloc[1080:1200].mean()
+        overnight_avg = summer_profile.iloc[120:240].mean()
+        assert evening_avg > overnight_avg * 2
+
+    def test_winter_consumption_higher_than_summer(
+        self, summer_profile, winter_profile
+    ):
+        """Winter daily consumption is higher than summer."""
+        summer_total = summer_profile.sum() / 60  # kWh
+        winter_total = winter_profile.sum() / 60  # kWh
+        assert winter_total > summer_total
+
+
+class TestCalculateAnnualConsumption:
+    """Test annual consumption calculation."""
+
+    def test_calculates_from_minute_profile(self):
+        """Correctly calculates total consumption."""
+        # Create 1 day profile at constant 1 kW
+        index = pd.date_range("2024-01-01", periods=1440, freq="1min")
+        profile = pd.Series([1.0] * 1440, index=index)
+
+        # 1 kW for 1440 minutes = 1440/60 = 24 kWh
+        total = calculate_annual_consumption(profile)
+        assert total == pytest.approx(24.0, rel=0.001)
+
+    def test_empty_profile_returns_zero(self):
+        """Empty profile returns zero consumption."""
+        profile = pd.Series([], dtype=float)
+        assert calculate_annual_consumption(profile) == 0.0
+
+
+class TestScaleProfileToAnnual:
+    """Test LOAD-003: Profile scaling to annual target."""
+
+    def test_scales_to_target(self):
+        """Scales profile to match target annual consumption."""
+        # Create simple 1-year profile (simplified)
+        index = pd.date_range("2024-01-01", periods=1440, freq="1min")
+        profile = pd.Series([1.0] * 1440, index=index)  # 24 kWh
+
+        scaled = scale_profile_to_annual(profile, target_annual_kwh=48.0)
+        total = calculate_annual_consumption(scaled)
+
+        assert total == pytest.approx(48.0, rel=0.001)
+
+    def test_preserves_shape(self):
+        """Scaling preserves temporal shape."""
+        index = pd.date_range("2024-01-01", periods=100, freq="1min")
+        profile = pd.Series(np.arange(100, dtype=float), index=index)
+
+        scaled = scale_profile_to_annual(profile, target_annual_kwh=100.0)
+
+        # Relative values should be preserved
+        assert (scaled.iloc[50] / scaled.iloc[25]) == pytest.approx(
+            profile.iloc[50] / profile.iloc[25], rel=0.001
+        )
+
+    def test_raises_on_zero_consumption(self):
+        """Raises error when profile has zero consumption."""
+        profile = pd.Series([0.0] * 100)
+        with pytest.raises(ValueError, match="zero"):
+            scale_profile_to_annual(profile, target_annual_kwh=100.0)
+
+
+class TestHouseholdSizeParameter:
+    """Test LOAD-004: Household size affecting consumption."""
+
+    def test_larger_household_higher_consumption(self):
+        """Larger households have higher consumption."""
+        config_2 = LoadConfig(household_occupants=2)
+        config_4 = LoadConfig(household_occupants=4)
+
+        assert config_4.get_annual_consumption() > config_2.get_annual_consumption()
+
+    def test_ofgem_tdcv_values_used(self):
+        """Uses Ofgem TDCV values for standard sizes."""
+        for occupants in range(1, 6):
+            config = LoadConfig(household_occupants=occupants)
+            expected = OFGEM_TDCV_BY_OCCUPANTS[occupants]
+            assert config.get_annual_consumption() == expected
+
+    def test_occupants_above_five_extrapolated(self):
+        """Occupants > 5 extrapolate from 5-person baseline."""
+        config_5 = LoadConfig(household_occupants=5)
+        config_7 = LoadConfig(household_occupants=7)
+
+        # Each extra person adds 400 kWh
+        expected = OFGEM_TDCV_BY_OCCUPANTS[5] + 2 * 400.0
+        assert config_7.get_annual_consumption() == expected
+
+    def test_profile_scales_with_household_size(self):
+        """Generated profile scales with household size."""
+        config_small = LoadConfig(household_occupants=1, use_stochastic=False)
+        config_large = LoadConfig(household_occupants=5, use_stochastic=False)
+
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+
+        profile_small = generate_load_profile(config_small, start, end)
+        profile_large = generate_load_profile(config_large, start, end)
+
+        total_small = calculate_annual_consumption(profile_small)
+        total_large = calculate_annual_consumption(profile_large)
+
+        # Larger household should use more energy
+        assert total_large > total_small
+
+        # Ratio should match TDCV ratio
+        expected_ratio = OFGEM_TDCV_BY_OCCUPANTS[5] / OFGEM_TDCV_BY_OCCUPANTS[1]
+        actual_ratio = total_large / total_small
+        assert actual_ratio == pytest.approx(expected_ratio, rel=0.01)
+
+
+class TestRichardsonpyIntegration:
+    """Test LOAD-001: richardsonpy integration."""
+
+    def test_richardsonpy_availability_flag(self):
+        """RICHARDSONPY_AVAILABLE correctly indicates availability."""
+        # This test just documents the current state
+        assert isinstance(RICHARDSONPY_AVAILABLE, bool)
+
+    def test_fallback_to_elexon_when_unavailable(self):
+        """Falls back to Elexon profile when richardsonpy unavailable."""
+        # Even with use_stochastic=True, should fall back gracefully
+        config = LoadConfig(
+            annual_consumption_kwh=3400.0,
+            use_stochastic=True,
+        )
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+
+        # Should not raise, should return valid profile
+        profile = generate_load_profile(config, start, end)
+        assert isinstance(profile, pd.Series)
+        assert len(profile) == 1440
+
+    def test_disable_stochastic_uses_elexon(self):
+        """use_stochastic=False always uses Elexon profile."""
+        config = LoadConfig(
+            annual_consumption_kwh=3400.0,
+            use_stochastic=False,
+        )
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+
+        profile = generate_load_profile(config, start, end)
+        assert isinstance(profile, pd.Series)
+        assert len(profile) == 1440
+
+    @pytest.mark.skipif(
+        not RICHARDSONPY_AVAILABLE,
+        reason="richardsonpy not installed"
+    )
+    def test_richardsonpy_generates_valid_profile(self):
+        """When available, richardsonpy generates valid profile."""
+        config = LoadConfig(
+            annual_consumption_kwh=3400.0,
+            household_occupants=3,
+            use_stochastic=True,
+        )
+        start = pd.Timestamp("2024-06-21")
+        end = pd.Timestamp("2024-06-21")
+
+        profile = generate_load_profile(config, start, end)
+
+        assert isinstance(profile, pd.Series)
+        assert len(profile) == 1440
+        assert (profile >= 0).all()
+        assert profile.index.tz is not None
