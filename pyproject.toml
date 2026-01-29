@@ -28,7 +28,11 @@ dependencies = [
     "pandas>=2.0.0",
     "numpy>=1.24.0",
     "pyyaml>=6.0.0",
+    "typer[all]>=0.9.0",
 ]
+
+[project.scripts]
+solar-challenge = "solar_challenge.cli:app"
 
 [project.optional-dependencies]
 dev = [
