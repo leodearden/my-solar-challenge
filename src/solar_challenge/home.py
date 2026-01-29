@@ -103,6 +103,7 @@ def simulate_home(
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     validate_balance: bool = True,
+    weather_data: pd.DataFrame | None = None,
 ) -> SimulationResults:
     """Simulate a single home for a date range.
 
@@ -111,12 +112,14 @@ def simulate_home(
         start_date: Start of simulation period
         end_date: End of simulation period (inclusive)
         validate_balance: Whether to validate energy balance each timestep
+        weather_data: Pre-fetched weather data (optional, will fetch if None)
 
     Returns:
         SimulationResults with all time series at 1-minute resolution
     """
     # Get weather data (TMY for now)
-    weather_data = get_tmy_data(config.location)
+    if weather_data is None:
+        weather_data = get_tmy_data(config.location)
 
     # Generate PV output at hourly resolution
     hourly_generation = simulate_pv_output(

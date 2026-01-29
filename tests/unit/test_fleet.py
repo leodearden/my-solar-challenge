@@ -8,8 +8,10 @@ from solar_challenge.fleet import (
     FleetResults,
     FleetSummary,
     calculate_fleet_summary,
+    simulate_fleet,
+    simulate_fleet_iter,
 )
-from solar_challenge.home import SimulationResults
+from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
@@ -95,10 +97,6 @@ class TestFleetConfigCreation:
                 battery_capacities_kwh=[None, 5.0, 5.0],  # Wrong length
                 annual_consumptions_kwh=[3400, 3400],
             )
-
-
-# Import HomeConfig for tests
-from solar_challenge.home import HomeConfig
 
 
 class TestFleetResults:
@@ -235,3 +233,129 @@ class TestFleetSummary:
 
         # Grid dependency = 0 (no imports)
         assert summary.fleet_grid_dependency_ratio == 0.0
+
+
+class TestSimulateFleetIter:
+    """Test simulate_fleet_iter iterator function."""
+
+    @pytest.fixture
+    def small_fleet_config(self) -> FleetConfig:
+        """Create a small fleet config for testing."""
+        return FleetConfig.create_uniform(
+            n_homes=3,
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3400.0),
+            name="Test Fleet",
+        )
+
+    def test_sequential_yields_in_order(self, small_fleet_config):
+        """Sequential iteration yields results in order."""
+        start = pd.Timestamp("2024-06-21", tz="Europe/London")
+        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+
+        indices = []
+        results = []
+        for idx, result in simulate_fleet_iter(
+            small_fleet_config, start, end, parallel=False
+        ):
+            indices.append(idx)
+            results.append(result)
+
+        assert indices == [0, 1, 2]
+        assert len(results) == 3
+        assert all(isinstance(r, SimulationResults) for r in results)
+
+    def test_parallel_yields_all_results(self, small_fleet_config):
+        """Parallel iteration yields all results (order may vary)."""
+        start = pd.Timestamp("2024-06-21", tz="Europe/London")
+        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+
+        indices = []
+        results = []
+        for idx, result in simulate_fleet_iter(
+            small_fleet_config, start, end, parallel=True, max_workers=2
+        ):
+            indices.append(idx)
+            results.append(result)
+
+        assert sorted(indices) == [0, 1, 2]
+        assert len(results) == 3
+        assert all(isinstance(r, SimulationResults) for r in results)
+
+    def test_single_home_skips_parallel(self):
+        """Single home fleet skips parallelization."""
+        config = FleetConfig.create_uniform(
+            n_homes=1,
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3400.0),
+        )
+        start = pd.Timestamp("2024-06-21", tz="Europe/London")
+        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+
+        results = list(simulate_fleet_iter(config, start, end, parallel=True))
+
+        assert len(results) == 1
+        assert results[0][0] == 0
+
+
+class TestParallelMatchesSequential:
+    """Test that parallel and sequential produce same results."""
+
+    def test_results_match(self):
+        """Parallel and sequential simulations produce identical results."""
+        config = FleetConfig.create_uniform(
+            n_homes=3,
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3400.0),
+        )
+        start = pd.Timestamp("2024-06-21", tz="Europe/London")
+        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+
+        sequential_results = simulate_fleet(config, start, end, parallel=False)
+        parallel_results = simulate_fleet(config, start, end, parallel=True, max_workers=2)
+
+        assert len(sequential_results) == len(parallel_results)
+
+        for i in range(len(sequential_results)):
+            seq_gen = sequential_results[i].generation
+            par_gen = parallel_results[i].generation
+            pd.testing.assert_series_equal(seq_gen, par_gen)
+
+
+class TestSimulateHomeWeatherData:
+    """Test optional weather_data parameter in simulate_home."""
+
+    def test_accepts_weather_data_parameter(self):
+        """simulate_home accepts pre-fetched weather data."""
+        from solar_challenge.weather import get_tmy_data
+
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3400.0),
+        )
+        start = pd.Timestamp("2024-06-21", tz="Europe/London")
+        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+
+        # Pre-fetch weather data
+        weather = get_tmy_data(config.location)
+
+        # Should work with provided weather data
+        result = simulate_home(config, start, end, weather_data=weather)
+
+        assert isinstance(result, SimulationResults)
+        assert len(result.generation) == 1440  # 1 day at minute resolution
+
+    def test_fetches_weather_when_none(self):
+        """simulate_home fetches weather data when not provided."""
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3400.0),
+        )
+        start = pd.Timestamp("2024-06-21", tz="Europe/London")
+        end = pd.Timestamp("2024-06-21", tz="Europe/London")
+
+        # Should work without weather data
+        result = simulate_home(config, start, end, weather_data=None)
+
+        assert isinstance(result, SimulationResults)
+        assert len(result.generation) == 1440

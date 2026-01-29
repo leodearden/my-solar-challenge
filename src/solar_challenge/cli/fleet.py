@@ -8,6 +8,7 @@ import typer
 
 from solar_challenge.cli.utils import (
     console,
+    create_fleet_progress,
     create_progress,
     create_summary_table,
     handle_errors,
@@ -18,7 +19,13 @@ from solar_challenge.config import (
     create_bristol_phase1_scenario,
     load_fleet_config,
 )
-from solar_challenge.fleet import FleetResults, calculate_fleet_summary, simulate_fleet
+from solar_challenge.fleet import (
+    FleetConfig,
+    FleetResults,
+    calculate_fleet_summary,
+    simulate_fleet_iter,
+)
+from solar_challenge.home import SimulationResults
 
 app = typer.Typer(help="Fleet simulation commands")
 
@@ -61,6 +68,20 @@ def run(
             help="Output CSV file path for aggregate results",
         ),
     ] = None,
+    workers: Annotated[
+        Optional[int],
+        typer.Option(
+            "--workers", "-w",
+            help="Number of parallel workers",
+        ),
+    ] = None,
+    sequential: Annotated[
+        bool,
+        typer.Option(
+            "--sequential",
+            help="Disable parallelization",
+        ),
+    ] = False,
 ) -> None:
     """Run a fleet simulation from config file.
 
@@ -80,10 +101,27 @@ def run(
     days = (end_date - start_date).days + 1
     print_info(f"Simulating fleet of {n_homes} homes for {days} days")
 
-    with create_progress() as progress:
-        task = progress.add_task(f"Simulating {n_homes} homes...", total=None)
-        results = simulate_fleet(fleet_config, start_date, end_date)
-        progress.update(task, completed=True)
+    results_list: list[SimulationResults | None] = [None] * n_homes
+
+    with create_fleet_progress() as progress:
+        task = progress.add_task(f"Simulating {n_homes} homes...", total=n_homes)
+        for idx, result in simulate_fleet_iter(
+            fleet_config, start_date, end_date,
+            parallel=not sequential, max_workers=workers
+        ):
+            results_list[idx] = result
+            progress.update(task, advance=1)
+
+    # Build FleetResults from results_list
+    final_results: list[SimulationResults] = []
+    for r in results_list:
+        assert r is not None
+        final_results.append(r)
+
+    results = FleetResults(
+        per_home_results=final_results,
+        home_configs=fleet_config.homes,
+    )
 
     summary = calculate_fleet_summary(results)
 
@@ -143,6 +181,20 @@ def bristol_phase1(
             help="Number of days to simulate (overrides --end)",
         ),
     ] = None,
+    workers: Annotated[
+        Optional[int],
+        typer.Option(
+            "--workers", "-w",
+            help="Number of parallel workers",
+        ),
+    ] = None,
+    sequential: Annotated[
+        bool,
+        typer.Option(
+            "--sequential",
+            help="Disable parallelization",
+        ),
+    ] = False,
 ) -> None:
     """Run the built-in Bristol Phase 1 scenario.
 
@@ -168,14 +220,29 @@ def bristol_phase1(
     print_info("Distribution: 20% 3kW, 40% 4kW, 30% 5kW, 10% 6kW PV")
     print_info("Batteries: 40% none, 40% 5kWh, 20% 10kWh")
 
-    from solar_challenge.fleet import FleetConfig
-
     fleet_config = FleetConfig(homes=scenario.homes, name="Bristol Phase 1")
 
-    with create_progress() as progress:
-        task = progress.add_task(f"Simulating {n_homes} homes...", total=None)
-        results = simulate_fleet(fleet_config, start_date, end_date)
-        progress.update(task, completed=True)
+    results_list: list[SimulationResults | None] = [None] * n_homes
+
+    with create_fleet_progress() as progress:
+        task = progress.add_task(f"Simulating {n_homes} homes...", total=n_homes)
+        for idx, result in simulate_fleet_iter(
+            fleet_config, start_date, end_date,
+            parallel=not sequential, max_workers=workers
+        ):
+            results_list[idx] = result
+            progress.update(task, advance=1)
+
+    # Build FleetResults from results_list
+    final_results: list[SimulationResults] = []
+    for r in results_list:
+        assert r is not None
+        final_results.append(r)
+
+    results = FleetResults(
+        per_home_results=final_results,
+        home_configs=fleet_config.homes,
+    )
 
     summary = calculate_fleet_summary(results)
 

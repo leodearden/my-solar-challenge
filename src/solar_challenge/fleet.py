@@ -1,7 +1,9 @@
 """Fleet simulation for multiple homes."""
 
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Iterator, Optional
 
 import pandas as pd
 
@@ -16,6 +18,7 @@ from solar_challenge.home import (
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.weather import get_tmy_data
 
 
 @dataclass
@@ -222,11 +225,67 @@ class FleetSummary:
     simulation_days: int
 
 
+def _simulate_home_worker(
+    home_index: int,
+    home_config: HomeConfig,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    validate_balance: bool,
+) -> tuple[int, SimulationResults]:
+    """Worker for parallel execution. Must be top-level for pickle."""
+    results = simulate_home(home_config, start_date, end_date, validate_balance)
+    return (home_index, results)
+
+
+def simulate_fleet_iter(
+    config: FleetConfig,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    validate_balance: bool = True,
+    parallel: bool = True,
+    max_workers: int | None = None,
+) -> Iterator[tuple[int, SimulationResults]]:
+    """Yield (home_index, result) as each simulation completes.
+
+    Args:
+        config: Fleet configuration
+        start_date: Start of simulation period
+        end_date: End of simulation period (inclusive)
+        validate_balance: Whether to validate energy balance
+        parallel: Whether to run simulations in parallel
+        max_workers: Maximum number of parallel workers (defaults to CPU count)
+
+    Yields:
+        Tuples of (home_index, SimulationResults) as each completes
+    """
+    n_homes = len(config.homes)
+
+    # Pre-warm weather cache
+    get_tmy_data(config.homes[0].location, use_cache=True)
+
+    if not parallel or n_homes == 1:
+        for idx, home in enumerate(config.homes):
+            yield (idx, simulate_home(home, start_date, end_date, validate_balance))
+    else:
+        workers = max_workers or min(n_homes, os.cpu_count() or 4)
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(
+                    _simulate_home_worker, i, h, start_date, end_date, validate_balance
+                ): i
+                for i, h in enumerate(config.homes)
+            }
+            for future in as_completed(futures):
+                yield future.result()
+
+
 def simulate_fleet(
     config: FleetConfig,
     start_date: pd.Timestamp,
     end_date: pd.Timestamp,
     validate_balance: bool = True,
+    parallel: bool = True,
+    max_workers: int | None = None,
 ) -> FleetResults:
     """Simulate all homes in a fleet for a date range.
 
@@ -238,23 +297,27 @@ def simulate_fleet(
         start_date: Start of simulation period
         end_date: End of simulation period (inclusive)
         validate_balance: Whether to validate energy balance
+        parallel: Whether to run simulations in parallel
+        max_workers: Maximum number of parallel workers (defaults to CPU count)
 
     Returns:
         FleetResults with per-home results
     """
-    results: list[SimulationResults] = []
+    results: list[SimulationResults | None] = [None] * len(config.homes)
 
-    for home_config in config.homes:
-        home_results = simulate_home(
-            home_config,
-            start_date,
-            end_date,
-            validate_balance=validate_balance,
-        )
-        results.append(home_results)
+    for idx, result in simulate_fleet_iter(
+        config, start_date, end_date, validate_balance, parallel, max_workers
+    ):
+        results[idx] = result
+
+    # Convert to non-optional list (all positions filled)
+    final_results: list[SimulationResults] = []
+    for r in results:
+        assert r is not None
+        final_results.append(r)
 
     return FleetResults(
-        per_home_results=results,
+        per_home_results=final_results,
         home_configs=config.homes,
     )
 
