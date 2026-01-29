@@ -124,8 +124,10 @@ class TestGenerateLoadProfile:
         # 3 days = 3 * 1440 minutes
         assert len(profile) == 3 * 1440
 
-    def test_week_profile_scales_to_annual(self, config):
-        """Week profile scales approximately to annual target."""
+    def test_week_profile_scales_to_annual(self):
+        """Week profile scales approximately to annual target (Elexon profile)."""
+        # Use Elexon profile explicitly for deterministic seasonal scaling test
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
         start = pd.Timestamp("2024-06-01")
         end = pd.Timestamp("2024-06-07")  # 7 days
         profile = generate_load_profile(config, start, end)
@@ -140,12 +142,16 @@ class TestGenerateLoadProfile:
 
 
 class TestElexonProfileShape:
-    """Test Elexon Profile Class 1 characteristics."""
+    """Test Elexon Profile Class 1 characteristics.
+
+    These tests explicitly use use_stochastic=False to test the
+    deterministic Elexon profile shape.
+    """
 
     @pytest.fixture
     def summer_profile(self) -> pd.Series:
-        """Summer day profile."""
-        config = LoadConfig(annual_consumption_kwh=3400.0)
+        """Summer day profile (Elexon)."""
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
         return generate_load_profile(
             config,
             pd.Timestamp("2024-06-21"),
@@ -154,8 +160,8 @@ class TestElexonProfileShape:
 
     @pytest.fixture
     def winter_profile(self) -> pd.Series:
-        """Winter day profile."""
-        config = LoadConfig(annual_consumption_kwh=3400.0)
+        """Winter day profile (Elexon)."""
+        config = LoadConfig(annual_consumption_kwh=3400.0, use_stochastic=False)
         return generate_load_profile(
             config,
             pd.Timestamp("2024-01-15"),

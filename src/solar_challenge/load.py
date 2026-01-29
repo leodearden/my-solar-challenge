@@ -11,7 +11,7 @@ import pandas as pd
 # Use Any type since module may not be available
 _richardsonpy_module: Any = None
 try:
-    import richardsonpy as _rpy  # type: ignore[import-not-found]
+    import richardsonpy as _rpy  # type: ignore[import-untyped]
     _richardsonpy_module = _rpy
 except ImportError:
     pass
@@ -186,6 +186,12 @@ def _try_richardsonpy_profile(
 ) -> Optional[pd.Series]:
     """Try to generate profile using richardsonpy.
 
+    Uses richardsonpy's stochastic occupancy and appliance models to generate
+    realistic domestic load profiles with appliance-level variability.
+
+    Note: richardsonpy requires full-year irradiance data for validation,
+    so we always simulate 365 days and slice to the requested period.
+
     Args:
         config: Load configuration
         start_date: Start of simulation period
@@ -199,16 +205,71 @@ def _try_richardsonpy_profile(
         return None
 
     try:
-        # richardsonpy uses different parameters
-        # This is a simplified interface - actual implementation would need
-        # to map our parameters to richardsonpy's API
+        from richardsonpy.classes.occupancy import Occupancy  # type: ignore[import-untyped]
+        from richardsonpy.classes.electric_load import ElectricLoad  # type: ignore[import-untyped]
 
-        # Generate profile using richardsonpy
-        # The actual API depends on richardsonpy version
-        # Typical usage: richardsonpy.generate_profile(...)
-        num_days = (end_date - start_date).days + 1
+        timestep_seconds = 600  # richardsonpy uses 10-minute resolution
+        timesteps_per_day = 86400 // timestep_seconds  # 144
 
-        # Create minute index
+        # richardsonpy requires full-year irradiance data (validates against 365/366 days)
+        # So we always simulate a full year starting from Jan 1 and slice later
+        full_year_days = 365
+        n_timesteps_year = full_year_days * timesteps_per_day  # 52560
+
+        # Determine initial_day (1-365) from start_date for seasonal alignment
+        initial_day = start_date.dayofyear
+
+        # Generate stochastic occupancy profile for full year
+        occ = Occupancy(
+            number_occupants=config.household_occupants,
+            initial_day=1,  # Always start from day 1 for full year
+            nb_days=full_year_days,
+        )
+
+        # Create synthetic radiation for lighting model (simple diurnal pattern)
+        # This affects lighting load timing but not total consumption (normalized)
+        q_direct = np.zeros(n_timesteps_year)
+        q_diffuse = np.zeros(n_timesteps_year)
+
+        # Simple daylight pattern: diffuse radiation during daylight hours
+        for day in range(full_year_days):
+            for step in range(timesteps_per_day):
+                hour = (step * timestep_seconds) / 3600
+                # Approximate daylight: 6am-8pm with peak at noon
+                if 6 <= hour <= 20:
+                    # Sinusoidal pattern peaking at 1pm (hour 13)
+                    diffuse = 100 * max(0, np.sin((hour - 6) * np.pi / 14))
+                    q_diffuse[day * timesteps_per_day + step] = diffuse
+
+        # Generate stochastic electric load profile
+        el = ElectricLoad(
+            occ_profile=occ.occupancy,
+            total_nb_occ=config.household_occupants,
+            q_direct=q_direct,
+            q_diffuse=q_diffuse,
+            annual_demand=config.get_annual_consumption(),
+            timestep=timestep_seconds,
+            do_normalization=True,  # Scale to target annual consumption
+        )
+
+        # loadcurve is in Watts at 10-minute resolution for full year
+        load_10min_w = el.loadcurve
+
+        # Create 10-minute index for full year (using a reference year)
+        # We'll use the year from start_date for the reference
+        year = start_date.year
+        full_year_start = pd.Timestamp(f"{year}-01-01", tz=timezone)
+        index_10min = pd.date_range(
+            start=full_year_start,
+            periods=len(load_10min_w),
+            freq="10min",
+            tz=timezone,
+        )
+
+        # Convert to kW
+        load_10min_kw = pd.Series(load_10min_w / 1000.0, index=index_10min)
+
+        # Create 1-minute index for the requested period
         minute_index = pd.date_range(
             start=start_date,
             end=end_date + pd.Timedelta(days=1) - pd.Timedelta(minutes=1),
@@ -216,24 +277,22 @@ def _try_richardsonpy_profile(
             tz=timezone,
         )
 
-        # richardsonpy typically generates at 1-minute resolution
-        # Map occupants to richardsonpy's household type
-        profile_data: np.ndarray[Any, np.dtype[np.float64]] = (
-            _richardsonpy_module.generate_load_profile(
-                num_days=num_days,
-                num_occupants=config.household_occupants,
-            )
+        # First expand full year to 1-minute resolution
+        full_year_1min_index = pd.date_range(
+            start=full_year_start,
+            periods=len(load_10min_w) * 10,
+            freq="1min",
+            tz=timezone,
         )
+        load_1min_full = load_10min_kw.reindex(full_year_1min_index, method="ffill")
+        load_1min_full = load_1min_full.ffill().bfill()
 
-        # Ensure correct length
-        if len(profile_data) != len(minute_index):
-            profile_data = profile_data[:len(minute_index)]
+        # Slice to requested period
+        load_1min_kw = load_1min_full.reindex(minute_index)
+        load_1min_kw = load_1min_kw.ffill().bfill()  # Handle any edge NaNs
+        load_1min_kw.name = "demand_kw"
 
-        profile = pd.Series(profile_data, index=minute_index, name="demand_kw")
-
-        # Scale to target annual consumption
-        annual_target = config.get_annual_consumption()
-        return scale_profile_to_annual(profile, annual_target)
+        return load_1min_kw
 
     except Exception:
         # Fall back to Elexon profile if richardsonpy fails

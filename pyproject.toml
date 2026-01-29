@@ -36,6 +36,9 @@ dev = [
     "pytest-cov>=4.0.0",
     "mypy>=1.0.0",
 ]
+stochastic = [
+    "richardsonpy>=0.2.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
