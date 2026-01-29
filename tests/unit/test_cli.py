@@ -74,7 +74,6 @@ class TestFleetCLI:
         result = runner.invoke(app, ["fleet", "--help"])
         assert result.exit_code == 0
         assert "run" in result.stdout
-        assert "bristol-phase1" in result.stdout
 
     def test_fleet_run_help(self) -> None:
         """Test fleet run --help."""
@@ -83,14 +82,6 @@ class TestFleetCLI:
         assert "CONFIG" in result.stdout
         assert "--start" in result.stdout
         assert "--output" in result.stdout
-
-    def test_fleet_bristol_phase1_help(self) -> None:
-        """Test fleet bristol-phase1 --help."""
-        result = runner.invoke(app, ["fleet", "bristol-phase1", "--help"])
-        assert result.exit_code == 0
-        assert "--start" in result.stdout
-        assert "--days" in result.stdout
-        assert "100 homes" in result.stdout
 
 
 class TestValidateCLI:

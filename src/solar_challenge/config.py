@@ -5,6 +5,7 @@ scenario definitions, and parameter sweep functionality.
 """
 
 import json
+import random
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator, Optional, Union
@@ -31,6 +32,211 @@ class ConfigurationError(Exception):
     """Raised when configuration file is invalid."""
 
     pass
+
+
+# --- Distribution Types for Fleet Generation ---
+
+
+@dataclass(frozen=True)
+class WeightedDiscreteDistribution:
+    """Weighted discrete distribution for sampling from a list of values.
+
+    Weights are auto-normalized (e.g., [2,4,3,1] == [20,40,30,10]).
+
+    Attributes:
+        values: List of values to sample from (can include None)
+        weights: Corresponding weights (must be non-negative, sum > 0)
+    """
+
+    values: tuple[Optional[float], ...]
+    weights: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.values) != len(self.weights):
+            raise ConfigurationError(
+                "WeightedDiscreteDistribution: values and weights must have same length"
+            )
+        if any(w < 0 for w in self.weights):
+            raise ConfigurationError(
+                "WeightedDiscreteDistribution: weights cannot be negative"
+            )
+        if sum(self.weights) == 0:
+            raise ConfigurationError(
+                "WeightedDiscreteDistribution: weights cannot all be zero"
+            )
+
+
+@dataclass(frozen=True)
+class NormalDistribution:
+    """Normal (Gaussian) distribution with optional bounds.
+
+    Attributes:
+        mean: Mean of the distribution
+        std: Standard deviation
+        min: Optional minimum bound (values are clamped)
+        max: Optional maximum bound (values are clamped)
+    """
+
+    mean: float
+    std: float
+    min: Optional[float] = None
+    max: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        if self.std < 0:
+            raise ConfigurationError("NormalDistribution: std cannot be negative")
+        if self.min is not None and self.max is not None and self.min > self.max:
+            raise ConfigurationError("NormalDistribution: min cannot be greater than max")
+
+
+@dataclass(frozen=True)
+class UniformDistribution:
+    """Uniform distribution between min and max.
+
+    Attributes:
+        min: Minimum value (inclusive)
+        max: Maximum value (inclusive)
+    """
+
+    min: float
+    max: float
+
+    def __post_init__(self) -> None:
+        if self.min > self.max:
+            raise ConfigurationError("UniformDistribution: min cannot be greater than max")
+
+
+@dataclass(frozen=True)
+class ShuffledPoolDistribution:
+    """Shuffled pool distribution for exact count assignment.
+
+    Creates a pool of values with exact counts, shuffles once, and assigns
+    sequentially. This matches the behavior of pre-generating distributions
+    then shuffling (like bristol-phase1).
+
+    Attributes:
+        values: List of values (can include None)
+        counts: Number of each value in the pool (must sum to n_homes)
+    """
+
+    values: tuple[Optional[float], ...]
+    counts: tuple[int, ...]
+
+    def __post_init__(self) -> None:
+        if len(self.values) != len(self.counts):
+            raise ConfigurationError(
+                "ShuffledPoolDistribution: values and counts must have same length"
+            )
+        if any(c < 0 for c in self.counts):
+            raise ConfigurationError(
+                "ShuffledPoolDistribution: counts cannot be negative"
+            )
+        if sum(self.counts) == 0:
+            raise ConfigurationError(
+                "ShuffledPoolDistribution: counts cannot all be zero"
+            )
+
+    def create_pool(self) -> list[Optional[float]]:
+        """Create the expanded pool of values."""
+        pool: list[Optional[float]] = []
+        for value, count in zip(self.values, self.counts):
+            pool.extend([value] * count)
+        return pool
+
+
+# Type alias for distribution specifications
+DistributionSpec = Union[
+    WeightedDiscreteDistribution,
+    NormalDistribution,
+    UniformDistribution,
+    ShuffledPoolDistribution,
+    float,
+    None,
+]
+
+
+@dataclass
+class PVDistributionConfig:
+    """Distribution configuration for PV parameters.
+
+    Attributes:
+        capacity_kw: Distribution for PV capacity (required)
+        azimuth: Distribution for azimuth angle (default: 180)
+        tilt: Distribution for tilt angle (default: 35)
+        module_efficiency: Distribution for module efficiency (default: 0.20)
+        inverter_efficiency: Distribution for inverter efficiency (default: 0.96)
+    """
+
+    capacity_kw: DistributionSpec
+    azimuth: DistributionSpec = 180.0
+    tilt: DistributionSpec = 35.0
+    module_efficiency: DistributionSpec = 0.20
+    inverter_efficiency: DistributionSpec = 0.96
+
+
+@dataclass
+class BatteryDistributionConfig:
+    """Distribution configuration for battery parameters.
+
+    Values can include None to represent homes without batteries.
+
+    Attributes:
+        capacity_kwh: Distribution for battery capacity (can include None)
+        max_charge_kw: Distribution for max charge rate (default: 2.5)
+        max_discharge_kw: Distribution for max discharge rate (default: 2.5)
+    """
+
+    capacity_kwh: DistributionSpec
+    max_charge_kw: DistributionSpec = 2.5
+    max_discharge_kw: DistributionSpec = 2.5
+
+
+@dataclass
+class LoadDistributionConfig:
+    """Distribution configuration for load parameters.
+
+    Attributes:
+        annual_consumption_kwh: Distribution for annual consumption (optional)
+        household_occupants: Distribution for occupants (default: 3)
+        use_stochastic: Whether to use stochastic load profiles (default: True)
+    """
+
+    annual_consumption_kwh: DistributionSpec = None
+    household_occupants: DistributionSpec = 3
+    use_stochastic: bool = True
+
+
+@dataclass
+class FleetDistributionConfig:
+    """Configuration for generating a fleet from distributions.
+
+    Attributes:
+        n_homes: Number of homes to generate
+        pv: PV distribution configuration
+        load: Load distribution configuration
+        battery: Battery distribution configuration (optional)
+        seed: Random seed for reproducibility (optional)
+        random_order: Order of random operations ("default" or "bristol_legacy")
+            - "default": Shuffle pools first, then sample normal distributions per home
+            - "bristol_legacy": Sample all normal distributions first, then shuffle pools
+              (matches exact behavior of create_bristol_phase1_scenario)
+    """
+
+    n_homes: int
+    pv: PVDistributionConfig
+    load: LoadDistributionConfig
+    battery: Optional[BatteryDistributionConfig] = None
+    seed: Optional[int] = None
+    random_order: str = "default"
+
+    def __post_init__(self) -> None:
+        if self.n_homes < 1:
+            raise ConfigurationError("FleetDistributionConfig: n_homes must be at least 1")
+        if self.random_order not in ("default", "bristol_legacy"):
+            raise ConfigurationError(
+                f"FleetDistributionConfig: random_order must be 'default' or 'bristol_legacy', "
+                f"got '{self.random_order}'"
+            )
 
 
 @dataclass
@@ -283,6 +489,359 @@ def _parse_output_config(data: Optional[dict[str, Any]]) -> Optional[OutputConfi
     )
 
 
+# --- Distribution Parsing and Sampling ---
+
+
+def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
+    """Parse a distribution specification from config data.
+
+    Args:
+        data: Raw data (scalar, None, or distribution dict)
+        param_name: Parameter name for error messages
+
+    Returns:
+        DistributionSpec (distribution object, scalar, or None)
+
+    Raises:
+        ConfigurationError: If distribution specification is invalid
+    """
+    # Handle None and scalars
+    if data is None:
+        return None
+    if isinstance(data, (int, float)):
+        return float(data)
+
+    # Must be a dict with type key
+    if not isinstance(data, dict):
+        raise ConfigurationError(
+            f"Invalid distribution spec for '{param_name}': expected number, null, or dict"
+        )
+
+    dist_type = data.get("type")
+    if dist_type is None:
+        raise ConfigurationError(
+            f"Distribution for '{param_name}' requires 'type' field"
+        )
+
+    if dist_type == "weighted_discrete":
+        if "values" not in data or "weights" not in data:
+            raise ConfigurationError(
+                f"weighted_discrete distribution for '{param_name}' requires 'values' and 'weights'"
+            )
+        values = tuple(v if v is not None else None for v in data["values"])
+        weights = tuple(float(w) for w in data["weights"])
+        return WeightedDiscreteDistribution(values=values, weights=weights)
+
+    elif dist_type == "normal":
+        if "mean" not in data or "std" not in data:
+            raise ConfigurationError(
+                f"normal distribution for '{param_name}' requires 'mean' and 'std'"
+            )
+        return NormalDistribution(
+            mean=float(data["mean"]),
+            std=float(data["std"]),
+            min=float(data["min"]) if data.get("min") is not None else None,
+            max=float(data["max"]) if data.get("max") is not None else None,
+        )
+
+    elif dist_type == "uniform":
+        if "min" not in data or "max" not in data:
+            raise ConfigurationError(
+                f"uniform distribution for '{param_name}' requires 'min' and 'max'"
+            )
+        return UniformDistribution(min=float(data["min"]), max=float(data["max"]))
+
+    elif dist_type == "fixed":
+        if "value" not in data:
+            raise ConfigurationError(
+                f"fixed distribution for '{param_name}' requires 'value'"
+            )
+        value = data["value"]
+        if value is None:
+            return None
+        return float(value)
+
+    elif dist_type == "shuffled_pool":
+        if "values" not in data or "counts" not in data:
+            raise ConfigurationError(
+                f"shuffled_pool distribution for '{param_name}' requires 'values' and 'counts'"
+            )
+        values = tuple(v if v is not None else None for v in data["values"])
+        counts = tuple(int(c) for c in data["counts"])
+        return ShuffledPoolDistribution(values=values, counts=counts)
+
+    else:
+        raise ConfigurationError(
+            f"Unknown distribution type '{dist_type}' for '{param_name}'. "
+            "Supported: weighted_discrete, normal, uniform, fixed, shuffled_pool"
+        )
+
+
+def _sample_from_distribution(spec: DistributionSpec, rng: random.Random) -> Optional[float]:
+    """Sample a single value from a distribution specification.
+
+    Args:
+        spec: Distribution specification
+        rng: Random number generator
+
+    Returns:
+        Sampled value (float or None)
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, (int, float)):
+        return float(spec)
+
+    if isinstance(spec, WeightedDiscreteDistribution):
+        return rng.choices(list(spec.values), weights=list(spec.weights), k=1)[0]
+
+    if isinstance(spec, NormalDistribution):
+        value = rng.gauss(spec.mean, spec.std)
+        if spec.min is not None:
+            value = max(spec.min, value)
+        if spec.max is not None:
+            value = min(spec.max, value)
+        return value
+
+    if isinstance(spec, UniformDistribution):
+        return rng.uniform(spec.min, spec.max)
+
+    # Should not reach here
+    raise ConfigurationError(f"Unknown distribution type: {type(spec)}")
+
+
+def _parse_pv_distribution_config(data: dict[str, Any]) -> PVDistributionConfig:
+    """Parse PV distribution configuration from config data."""
+    if "capacity_kw" not in data:
+        raise ConfigurationError("PV distribution config requires 'capacity_kw'")
+
+    return PVDistributionConfig(
+        capacity_kw=_parse_distribution_spec(data["capacity_kw"], "pv.capacity_kw"),
+        azimuth=_parse_distribution_spec(data.get("azimuth", 180.0), "pv.azimuth"),
+        tilt=_parse_distribution_spec(data.get("tilt", 35.0), "pv.tilt"),
+        module_efficiency=_parse_distribution_spec(
+            data.get("module_efficiency", 0.20), "pv.module_efficiency"
+        ),
+        inverter_efficiency=_parse_distribution_spec(
+            data.get("inverter_efficiency", 0.96), "pv.inverter_efficiency"
+        ),
+    )
+
+
+def _parse_battery_distribution_config(
+    data: Optional[dict[str, Any]],
+) -> Optional[BatteryDistributionConfig]:
+    """Parse battery distribution configuration from config data."""
+    if data is None:
+        return None
+
+    if "capacity_kwh" not in data:
+        raise ConfigurationError("Battery distribution config requires 'capacity_kwh'")
+
+    return BatteryDistributionConfig(
+        capacity_kwh=_parse_distribution_spec(data["capacity_kwh"], "battery.capacity_kwh"),
+        max_charge_kw=_parse_distribution_spec(
+            data.get("max_charge_kw", 2.5), "battery.max_charge_kw"
+        ),
+        max_discharge_kw=_parse_distribution_spec(
+            data.get("max_discharge_kw", 2.5), "battery.max_discharge_kw"
+        ),
+    )
+
+
+def _parse_load_distribution_config(data: dict[str, Any]) -> LoadDistributionConfig:
+    """Parse load distribution configuration from config data."""
+    return LoadDistributionConfig(
+        annual_consumption_kwh=_parse_distribution_spec(
+            data.get("annual_consumption_kwh"), "load.annual_consumption_kwh"
+        ),
+        household_occupants=_parse_distribution_spec(
+            data.get("household_occupants", 3), "load.household_occupants"
+        ),
+        use_stochastic=data.get("use_stochastic", True),
+    )
+
+
+def _parse_fleet_distribution_config(data: dict[str, Any]) -> FleetDistributionConfig:
+    """Parse fleet distribution configuration from config data."""
+    if "n_homes" not in data:
+        raise ConfigurationError("Fleet distribution config requires 'n_homes'")
+    if "pv" not in data:
+        raise ConfigurationError("Fleet distribution config requires 'pv' section")
+
+    return FleetDistributionConfig(
+        n_homes=int(data["n_homes"]),
+        pv=_parse_pv_distribution_config(data["pv"]),
+        load=_parse_load_distribution_config(data.get("load", {})),
+        battery=_parse_battery_distribution_config(data.get("battery")),
+        seed=data.get("seed"),
+        random_order=data.get("random_order", "default"),
+    )
+
+
+class _DistributionSampler:
+    """Helper class to handle sampling from distributions with pool support.
+
+    For ShuffledPoolDistribution, creates and shuffles the pool once,
+    then yields values sequentially. For other distributions, samples
+    each time (or uses pre-sampled values if pre_sample was called).
+    """
+
+    def __init__(self, rng: random.Random) -> None:
+        self._rng = rng
+        self._pools: dict[int, list[Optional[float]]] = {}
+        self._pool_indices: dict[int, int] = {}
+        self._presampled: dict[int, list[Optional[float]]] = {}
+        self._presample_indices: dict[int, int] = {}
+
+    def pre_sample(self, spec: DistributionSpec, n: int) -> None:
+        """Pre-sample n values from the distribution (for legacy mode)."""
+        if spec is None or isinstance(spec, (int, float)):
+            return  # Fixed values don't need pre-sampling
+        if isinstance(spec, ShuffledPoolDistribution):
+            return  # Shuffled pools are handled separately
+        spec_id = id(spec)
+        if spec_id not in self._presampled:
+            samples = [_sample_from_distribution(spec, self._rng) for _ in range(n)]
+            self._presampled[spec_id] = samples
+            self._presample_indices[spec_id] = 0
+
+    def prepare(self, spec: DistributionSpec) -> None:
+        """Prepare a distribution for sampling (creates pool if needed)."""
+        if isinstance(spec, ShuffledPoolDistribution):
+            spec_id = id(spec)
+            if spec_id not in self._pools:
+                pool = spec.create_pool()
+                self._rng.shuffle(pool)
+                self._pools[spec_id] = pool
+                self._pool_indices[spec_id] = 0
+
+    def sample(self, spec: DistributionSpec) -> Optional[float]:
+        """Sample a value from the distribution."""
+        spec_id = id(spec)
+
+        # Check for pre-sampled values first
+        if spec_id in self._presampled:
+            idx = self._presample_indices[spec_id]
+            value = self._presampled[spec_id][idx]
+            self._presample_indices[spec_id] = idx + 1
+            return value
+
+        # Check for shuffled pool
+        if isinstance(spec, ShuffledPoolDistribution):
+            pool = self._pools[spec_id]
+            idx = self._pool_indices[spec_id]
+            value = pool[idx]
+            self._pool_indices[spec_id] = idx + 1
+            return value
+
+        return _sample_from_distribution(spec, self._rng)
+
+
+def generate_homes_from_distribution(
+    config: FleetDistributionConfig,
+    location: Location,
+) -> list[HomeConfig]:
+    """Generate a list of homes by sampling from distributions.
+
+    Args:
+        config: Fleet distribution configuration
+        location: Location for all homes
+
+    Returns:
+        List of HomeConfig objects
+    """
+    rng = random.Random(config.seed)
+    sampler = _DistributionSampler(rng)
+    homes: list[HomeConfig] = []
+
+    # Collect all distribution specs
+    all_specs: list[DistributionSpec] = [
+        config.pv.capacity_kw,
+        config.pv.azimuth,
+        config.pv.tilt,
+        config.pv.module_efficiency,
+        config.pv.inverter_efficiency,
+        config.load.annual_consumption_kwh,
+        config.load.household_occupants,
+    ]
+    if config.battery is not None:
+        all_specs.extend([
+            config.battery.capacity_kwh,
+            config.battery.max_charge_kw,
+            config.battery.max_discharge_kw,
+        ])
+
+    if config.random_order == "bristol_legacy":
+        # Bristol legacy order: pre-sample all normal distributions first,
+        # then shuffle pools. This matches the exact random call order of
+        # create_bristol_phase1_scenario().
+        # Order: consumption (normal) -> pv shuffle -> battery shuffle
+        sampler.pre_sample(config.load.annual_consumption_kwh, config.n_homes)
+        sampler.prepare(config.pv.capacity_kw)
+        if config.battery is not None:
+            sampler.prepare(config.battery.capacity_kwh)
+        # Other specs don't need special handling (fixed values)
+    else:
+        # Default order: prepare all shuffled pools upfront
+        for spec in all_specs:
+            sampler.prepare(spec)
+
+    for i in range(config.n_homes):
+        # Sample PV parameters
+        pv_capacity = sampler.sample(config.pv.capacity_kw)
+        if pv_capacity is None or pv_capacity <= 0:
+            raise ConfigurationError(f"PV capacity must be positive, got {pv_capacity}")
+
+        pv_azimuth = sampler.sample(config.pv.azimuth)
+        pv_tilt = sampler.sample(config.pv.tilt)
+        pv_module_eff = sampler.sample(config.pv.module_efficiency)
+        pv_inverter_eff = sampler.sample(config.pv.inverter_efficiency)
+
+        pv_config = PVConfig(
+            capacity_kw=pv_capacity,
+            azimuth=pv_azimuth if pv_azimuth is not None else 180.0,
+            tilt=pv_tilt if pv_tilt is not None else 35.0,
+            module_efficiency=pv_module_eff if pv_module_eff is not None else 0.20,
+            inverter_efficiency=pv_inverter_eff if pv_inverter_eff is not None else 0.96,
+        )
+
+        # Sample battery parameters (may be None)
+        battery_config: Optional[BatteryConfig] = None
+        if config.battery is not None:
+            battery_capacity = sampler.sample(config.battery.capacity_kwh)
+            if battery_capacity is not None and battery_capacity > 0:
+                charge_kw = sampler.sample(config.battery.max_charge_kw)
+                discharge_kw = sampler.sample(config.battery.max_discharge_kw)
+                battery_config = BatteryConfig(
+                    capacity_kwh=battery_capacity,
+                    max_charge_kw=charge_kw if charge_kw is not None else 2.5,
+                    max_discharge_kw=discharge_kw if discharge_kw is not None else 2.5,
+                )
+
+        # Sample load parameters
+        annual_consumption = sampler.sample(config.load.annual_consumption_kwh)
+        household_occupants = sampler.sample(config.load.household_occupants)
+
+        load_config = LoadConfig(
+            annual_consumption_kwh=annual_consumption,
+            household_occupants=int(household_occupants) if household_occupants else 3,
+            use_stochastic=config.load.use_stochastic,
+        )
+
+        homes.append(
+            HomeConfig(
+                pv_config=pv_config,
+                battery_config=battery_config,
+                load_config=load_config,
+                location=location,
+                name=f"Home {i + 1}",
+            )
+        )
+
+    return homes
+
+
 def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
     """Parse a scenario from config data."""
     if "name" not in data:
@@ -448,6 +1007,10 @@ def load_home_config(path: Union[str, Path]) -> HomeConfig:
 def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     """Load a fleet configuration from file.
 
+    Supports two formats:
+    - Explicit homes list: `homes: [...]`
+    - Distribution-based generation: `fleet_distribution: {...}`
+
     Args:
         path: Path to configuration file
 
@@ -462,79 +1025,22 @@ def load_fleet_config(path: Union[str, Path]) -> FleetConfig:
     location_data = config.get("location")
     location = _parse_location(location_data) if location_data else Location.bristol()
 
-    homes_data = config.get("homes", [])
-    if not homes_data:
-        raise ConfigurationError("Fleet configuration requires 'homes' list")
+    # Check for fleet_distribution (new format)
+    if "fleet_distribution" in config:
+        dist_config = _parse_fleet_distribution_config(config["fleet_distribution"])
+        homes = generate_homes_from_distribution(dist_config, location)
+    elif "homes" in config:
+        # Explicit homes list (original format)
+        homes_data = config["homes"]
+        if not homes_data:
+            raise ConfigurationError("Fleet 'homes' list cannot be empty")
+        homes = [_parse_home_config(h, location) for h in homes_data]
+    else:
+        raise ConfigurationError(
+            "Fleet configuration requires either 'homes' list or 'fleet_distribution'"
+        )
 
-    homes = [_parse_home_config(h, location) for h in homes_data]
     return FleetConfig(homes=homes, name=config.get("name", ""))
-
-
-def create_bristol_phase1_scenario() -> ScenarioConfig:
-    """Create the default Bristol Phase 1 scenario.
-
-    This scenario represents 100 homes in Bristol with a realistic
-    mix of PV sizes (3-6 kW), battery sizes (0, 5, 10 kWh),
-    and consumption levels.
-
-    Returns:
-        ScenarioConfig for Bristol Phase 1
-    """
-    import random
-
-    random.seed(42)  # Reproducible distribution
-
-    location = Location.bristol()
-    homes: list[HomeConfig] = []
-
-    # Distribution:
-    # PV: 20% 3kW, 40% 4kW, 30% 5kW, 10% 6kW
-    pv_distribution = [3.0] * 20 + [4.0] * 40 + [5.0] * 30 + [6.0] * 10
-    # Battery: 40% none, 40% 5kWh, 20% 10kWh
-    battery_distribution: list[Optional[float]] = (
-        [None] * 40 + [5.0] * 40 + [10.0] * 20
-    )
-    # Consumption: Normal distribution around 3400 kWh, std 800 kWh
-    consumption_distribution = [
-        max(2000.0, min(6000.0, random.gauss(3400, 800)))
-        for _ in range(100)
-    ]
-
-    random.shuffle(pv_distribution)
-    random.shuffle(battery_distribution)
-
-    for i in range(100):
-        pv_kw = pv_distribution[i]
-        bat_kwh = battery_distribution[i]
-        consumption = consumption_distribution[i]
-
-        battery_config = (
-            BatteryConfig(capacity_kwh=bat_kwh) if bat_kwh is not None else None
-        )
-
-        homes.append(
-            HomeConfig(
-                pv_config=PVConfig(capacity_kw=pv_kw),
-                load_config=LoadConfig(annual_consumption_kwh=consumption),
-                battery_config=battery_config,
-                location=location,
-                name=f"Home {i + 1}",
-            )
-        )
-
-    return ScenarioConfig(
-        name="Bristol Phase 1",
-        description=(
-            "100 homes in Bristol with realistic mix of PV (3-6 kW), "
-            "batteries (0/5/10 kWh), and consumption levels"
-        ),
-        location=location,
-        period=SimulationPeriod(
-            start_date="2024-01-01",
-            end_date="2024-12-31",
-        ),
-        homes=homes,
-    )
 
 
 def run_parameter_sweep(
