@@ -158,9 +158,6 @@ def simulate_timestep(
     generation_kwh = generation_kw * duration_hours
     demand_kwh = demand_kw * duration_hours
 
-    # Self-consumption: min(generation, demand)
-    self_consumption_kwh = min(generation_kwh, demand_kwh)
-
     # Calculate excess and shortfall
     excess_kwh = max(0.0, generation_kwh - demand_kwh)
     shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
@@ -182,6 +179,11 @@ def simulate_timestep(
             battery_discharge_kwh = battery.discharge(shortfall_power_kw, timestep_minutes)
 
         battery_soc = battery.soc_kwh
+
+    # Self-consumption: direct PV consumption + battery discharge (capped at demand)
+    # Battery discharge represents PV energy stored earlier and consumed later
+    direct_consumption_kwh = min(generation_kwh, demand_kwh)
+    self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
 
     # Calculate grid flows
     # Export = excess - battery_charged

@@ -251,7 +251,8 @@ class TestGridExport:
             battery=default_battery,
             timestep_minutes=60,
         )
-        excess = result.generation - result.self_consumption
+        # Compute excess directly from generation and demand
+        excess = max(0, result.generation - result.demand)
         assert result.grid_export == pytest.approx(
             excess - result.battery_charge, rel=0.01
         )
@@ -312,7 +313,8 @@ class TestGridImport:
             battery=default_battery,
             timestep_minutes=60,
         )
-        shortfall = result.demand - result.self_consumption
+        # Compute shortfall directly from generation and demand
+        shortfall = max(0, result.demand - result.generation)
         assert result.grid_import == pytest.approx(
             shortfall - result.battery_discharge, rel=0.01
         )
@@ -331,6 +333,73 @@ class TestGridImport:
         # Battery can't discharge more, so all shortfall imports
         assert result.battery_discharge == 0.0
         assert result.grid_import == 2.0
+
+
+class TestSelfConsumptionWithBattery:
+    """Test self-consumption includes battery discharge."""
+
+    def test_self_consumption_includes_battery_discharge(self, default_battery):
+        """Self-consumption includes battery discharge (stored PV used later)."""
+        result = simulate_timestep(
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery=default_battery,
+            timestep_minutes=60,
+        )
+        # Direct consumption is min(gen, demand) = 1.0 kWh
+        # Battery discharge should be added to self-consumption
+        direct_consumption = min(result.generation, result.demand)
+        assert result.self_consumption == pytest.approx(
+            direct_consumption + result.battery_discharge, rel=0.01
+        )
+
+    def test_self_consumption_capped_at_demand(self):
+        """Self-consumption cannot exceed demand."""
+        config = BatteryConfig(capacity_kwh=10.0, max_discharge_kw=5.0)
+        battery = Battery(config, initial_soc_kwh=5.0)
+
+        result = simulate_timestep(
+            generation_kw=2.0,
+            demand_kw=3.0,
+            battery=battery,
+            timestep_minutes=60,
+        )
+        # Self-consumption should never exceed demand
+        assert result.self_consumption <= result.demand
+
+    def test_self_consumption_without_battery(self):
+        """Without battery, self-consumption equals min(gen, demand)."""
+        result = simulate_timestep(
+            generation_kw=2.0,
+            demand_kw=3.0,
+            battery=None,
+            timestep_minutes=60,
+        )
+        expected = min(result.generation, result.demand)
+        assert result.self_consumption == pytest.approx(expected, rel=0.01)
+
+    def test_self_consumption_zero_generation(self, default_battery):
+        """With zero generation, self-consumption equals battery discharge."""
+        result = simulate_timestep(
+            generation_kw=0.0,
+            demand_kw=2.0,
+            battery=default_battery,
+            timestep_minutes=60,
+        )
+        # Direct consumption = 0, so self-consumption = battery_discharge
+        assert result.self_consumption == pytest.approx(
+            result.battery_discharge, rel=0.01
+        )
+
+    def test_self_consumption_zero_demand(self, default_battery):
+        """With zero demand, self-consumption is zero."""
+        result = simulate_timestep(
+            generation_kw=3.0,
+            demand_kw=0.0,
+            battery=default_battery,
+            timestep_minutes=60,
+        )
+        assert result.self_consumption == 0.0
 
 
 class TestEnergyBalanceValidation:
