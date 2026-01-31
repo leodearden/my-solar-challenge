@@ -1,5 +1,6 @@
 """Load profile generation for domestic energy consumption."""
 
+import random
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -40,12 +41,14 @@ class LoadConfig:
             Affects consumption and profile shape.
         name: Optional identifier for the load profile
         use_stochastic: Use richardsonpy stochastic model if available
+        seed: Random seed for stochastic load generation (for reproducibility)
     """
 
     annual_consumption_kwh: Optional[float] = None
     household_occupants: int = 3  # Default UK average household size
     name: str = ""
     use_stochastic: bool = True  # Prefer stochastic model if available
+    seed: Optional[int] = None  # Seed for reproducible stochastic profiles
 
     def __post_init__(self) -> None:
         """Validate load configuration parameters."""
@@ -207,6 +210,12 @@ def _try_richardsonpy_profile(
     try:
         from richardsonpy.classes.occupancy import Occupancy  # type: ignore[import-untyped]
         from richardsonpy.classes.electric_load import ElectricLoad  # type: ignore[import-untyped]
+
+        # Set random seed for reproducibility if provided
+        # richardsonpy uses both numpy and Python's random module
+        if config.seed is not None:
+            np.random.seed(config.seed)
+            random.seed(config.seed)
 
         timestep_seconds = 600  # richardsonpy uses 10-minute resolution
         timesteps_per_day = 86400 // timestep_seconds  # 144

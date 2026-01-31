@@ -449,6 +449,7 @@ def _parse_load_config(data: dict[str, Any]) -> LoadConfig:
         household_occupants=data.get("household_occupants", 3),
         name=data.get("name", ""),
         use_stochastic=data.get("use_stochastic", True),
+        seed=data.get("seed"),
     )
 
 
@@ -823,10 +824,16 @@ def generate_homes_from_distribution(
         annual_consumption = sampler.sample(config.load.annual_consumption_kwh)
         household_occupants = sampler.sample(config.load.household_occupants)
 
+        # Derive per-home seed for reproducible stochastic load profiles
+        home_seed: Optional[int] = None
+        if config.seed is not None:
+            home_seed = config.seed + i
+
         load_config = LoadConfig(
             annual_consumption_kwh=annual_consumption,
             household_occupants=int(household_occupants) if household_occupants else 3,
             use_stochastic=config.load.use_stochastic,
+            seed=home_seed,
         )
 
         homes.append(
@@ -1223,6 +1230,7 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
             household_occupants=config.household_occupants,
             name=config.name,
             use_stochastic=config.use_stochastic,
+            seed=config.seed,
         )
     elif param_name == "household_occupants":
         return LoadConfig(
@@ -1230,5 +1238,6 @@ def _modify_load_config(config: LoadConfig, param_name: str, value: float) -> Lo
             household_occupants=int(value),
             name=config.name,
             use_stochastic=config.use_stochastic,
+            seed=config.seed,
         )
     return config
