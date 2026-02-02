@@ -144,12 +144,75 @@ class ShuffledPoolDistribution:
         return pool
 
 
+@dataclass(frozen=True)
+class SweepSpec:
+    """Sweep specification for parameter exploration.
+
+    Attributes:
+        min: Minimum value
+        max: Maximum value
+        steps: Number of steps
+        mode: "geometric" or "linear" (default: geometric)
+    """
+
+    min: float
+    max: float
+    steps: int
+    mode: str = "geometric"
+
+    def __post_init__(self) -> None:
+        if self.min <= 0 and self.mode == "geometric":
+            raise ConfigurationError(
+                "SweepSpec: geometric mode requires min > 0"
+            )
+        if self.max <= self.min:
+            raise ConfigurationError(
+                "SweepSpec: max must be greater than min"
+            )
+        if self.steps < 2:
+            raise ConfigurationError(
+                "SweepSpec: steps must be at least 2"
+            )
+        if self.mode not in ("geometric", "linear"):
+            raise ConfigurationError(
+                f"SweepSpec: mode must be 'geometric' or 'linear', got '{self.mode}'"
+            )
+
+    def get_values(self) -> list[float]:
+        """Generate the sweep values."""
+        if self.mode == "geometric":
+            ratio = (self.max / self.min) ** (1 / (self.steps - 1))
+            return [self.min * (ratio ** i) for i in range(self.steps)]
+        else:
+            step = (self.max - self.min) / (self.steps - 1)
+            return [self.min + step * i for i in range(self.steps)]
+
+
+@dataclass(frozen=True)
+class ProportionalDistribution:
+    """Distribution proportional to another sampled field.
+
+    Used for making one parameter proportional to another, e.g.,
+    battery capacity = multiplier * PV capacity.
+
+    Attributes:
+        source: Source field path (e.g., "pv.capacity_kw")
+        multiplier: Multiplication factor (float or SweepSpec)
+        offset: Additive offset (default 0.0)
+    """
+
+    source: str
+    multiplier: Union[float, SweepSpec] = 1.0
+    offset: float = 0.0
+
+
 # Type alias for distribution specifications
 DistributionSpec = Union[
     WeightedDiscreteDistribution,
     NormalDistribution,
     UniformDistribution,
     ShuffledPoolDistribution,
+    ProportionalDistribution,
     float,
     None,
 ]
@@ -571,10 +634,37 @@ def _parse_distribution_spec(data: Any, param_name: str) -> DistributionSpec:
         counts = tuple(int(c) for c in data["counts"])
         return ShuffledPoolDistribution(values=values, counts=counts)
 
+    elif dist_type == "proportional_to":
+        if "source" not in data:
+            raise ConfigurationError(
+                f"proportional_to distribution for '{param_name}' requires 'source'"
+            )
+        multiplier_data = data.get("multiplier", 1.0)
+        multiplier: Union[float, SweepSpec]
+        if isinstance(multiplier_data, dict):
+            # Parse sweep spec for multiplier
+            if multiplier_data.get("type") != "sweep":
+                raise ConfigurationError(
+                    f"proportional_to multiplier dict for '{param_name}' must have type='sweep'"
+                )
+            multiplier = SweepSpec(
+                min=float(multiplier_data["min"]),
+                max=float(multiplier_data["max"]),
+                steps=int(multiplier_data["steps"]),
+                mode=multiplier_data.get("mode", "geometric"),
+            )
+        else:
+            multiplier = float(multiplier_data)
+        return ProportionalDistribution(
+            source=data["source"],
+            multiplier=multiplier,
+            offset=float(data.get("offset", 0.0)),
+        )
+
     else:
         raise ConfigurationError(
             f"Unknown distribution type '{dist_type}' for '{param_name}'. "
-            "Supported: weighted_discrete, normal, uniform, fixed, shuffled_pool"
+            "Supported: weighted_discrete, normal, uniform, fixed, shuffled_pool, proportional_to"
         )
 
 
@@ -738,6 +828,35 @@ class _DistributionSampler:
 
         return _sample_from_distribution(spec, self._rng)
 
+    def sample_with_context(
+        self, spec: DistributionSpec, context: dict[str, Optional[float]]
+    ) -> Optional[float]:
+        """Sample with support for ProportionalDistribution.
+
+        For ProportionalDistribution, looks up the source value from context
+        and applies multiplier and offset. For other distributions, delegates
+        to the regular sample method.
+
+        Args:
+            spec: Distribution specification
+            context: Dict mapping field paths to sampled values
+
+        Returns:
+            Sampled value (float or None)
+        """
+        if isinstance(spec, ProportionalDistribution):
+            source_val = context.get(spec.source)
+            if source_val is None:
+                return None
+            multiplier = spec.multiplier
+            if isinstance(multiplier, SweepSpec):
+                raise ConfigurationError(
+                    "Cannot sample ProportionalDistribution with SweepSpec multiplier directly. "
+                    "Use expand_sweep_configs() to expand sweep values first."
+                )
+            return source_val * multiplier + spec.offset
+        return self.sample(spec)
+
 
 def generate_homes_from_distribution(
     config: FleetDistributionConfig,
@@ -807,13 +926,22 @@ def generate_homes_from_distribution(
             inverter_efficiency=pv_inverter_eff if pv_inverter_eff is not None else 0.96,
         )
 
+        # Build context for proportional distributions
+        context: dict[str, Optional[float]] = {"pv.capacity_kw": pv_capacity}
+
         # Sample battery parameters (may be None)
         battery_config: Optional[BatteryConfig] = None
         if config.battery is not None:
-            battery_capacity = sampler.sample(config.battery.capacity_kwh)
+            battery_capacity = sampler.sample_with_context(
+                config.battery.capacity_kwh, context
+            )
             if battery_capacity is not None and battery_capacity > 0:
-                charge_kw = sampler.sample(config.battery.max_charge_kw)
-                discharge_kw = sampler.sample(config.battery.max_discharge_kw)
+                charge_kw = sampler.sample_with_context(
+                    config.battery.max_charge_kw, context
+                )
+                discharge_kw = sampler.sample_with_context(
+                    config.battery.max_discharge_kw, context
+                )
                 battery_config = BatteryConfig(
                     capacity_kwh=battery_capacity,
                     max_charge_kw=charge_kw if charge_kw is not None else 2.5,
@@ -881,6 +1009,145 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
         home=home,
         output=_parse_output_config(data.get("output")),
     )
+
+
+import re
+
+# Pattern for variable substitution: ${VAR} or ${VAR:default}
+_VAR_PATTERN = re.compile(r"\$\{([^}:]+)(?::([^}]*))?\}")
+
+
+def _substitute_variables(data: Any, variables: dict[str, float]) -> Any:
+    """Recursively substitute ${VAR} or ${VAR:default} patterns in data.
+
+    Args:
+        data: Data structure to process (dict, list, or scalar)
+        variables: Dict mapping variable names to values
+
+    Returns:
+        Data with variables substituted
+    """
+    if isinstance(data, str):
+        match = _VAR_PATTERN.fullmatch(data)
+        if match:
+            var_name = match.group(1)
+            default_str = match.group(2)
+            if var_name in variables:
+                return variables[var_name]
+            elif default_str is not None:
+                return float(default_str)
+            else:
+                raise ConfigurationError(
+                    f"Variable '{var_name}' not provided and has no default"
+                )
+        return data
+    elif isinstance(data, dict):
+        return {k: _substitute_variables(v, variables) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [_substitute_variables(item, variables) for item in data]
+    else:
+        return data
+
+
+def substitute_config_variables(
+    config: dict[str, Any], variables: Optional[dict[str, float]] = None
+) -> dict[str, Any]:
+    """Substitute variables in a configuration dictionary.
+
+    Variables are specified as ${VAR} or ${VAR:default} in YAML values.
+
+    Args:
+        config: Configuration dictionary
+        variables: Dict mapping variable names to values (default: empty)
+
+    Returns:
+        Configuration with variables substituted
+    """
+    return _substitute_variables(config, variables or {})
+
+
+def detect_sweep_spec(config: FleetDistributionConfig) -> Optional[SweepSpec]:
+    """Find SweepSpec in config (e.g., in battery.capacity_kwh.multiplier).
+
+    Currently only checks battery.capacity_kwh for ProportionalDistribution
+    with a SweepSpec multiplier.
+
+    Args:
+        config: Fleet distribution configuration
+
+    Returns:
+        SweepSpec if found, None otherwise
+    """
+    if config.battery is not None:
+        cap_spec = config.battery.capacity_kwh
+        if isinstance(cap_spec, ProportionalDistribution):
+            if isinstance(cap_spec.multiplier, SweepSpec):
+                return cap_spec.multiplier
+    return None
+
+
+def _replace_sweep_with_value(
+    config: FleetDistributionConfig, value: float
+) -> FleetDistributionConfig:
+    """Create a copy of config with sweep multiplier replaced by a fixed value.
+
+    Args:
+        config: Original configuration with SweepSpec
+        value: Value to use instead of sweep
+
+    Returns:
+        New FleetDistributionConfig with fixed multiplier
+    """
+    if config.battery is None:
+        return config
+
+    cap_spec = config.battery.capacity_kwh
+    if not isinstance(cap_spec, ProportionalDistribution):
+        return config
+
+    new_cap_spec = ProportionalDistribution(
+        source=cap_spec.source,
+        multiplier=value,
+        offset=cap_spec.offset,
+    )
+    new_battery = BatteryDistributionConfig(
+        capacity_kwh=new_cap_spec,
+        max_charge_kw=config.battery.max_charge_kw,
+        max_discharge_kw=config.battery.max_discharge_kw,
+    )
+    return FleetDistributionConfig(
+        n_homes=config.n_homes,
+        pv=config.pv,
+        load=config.load,
+        battery=new_battery,
+        seed=config.seed,
+        random_order=config.random_order,
+    )
+
+
+def expand_sweep_configs(
+    config: FleetDistributionConfig,
+) -> Iterator[tuple[float, FleetDistributionConfig]]:
+    """Expand a config with SweepSpec into individual configs.
+
+    Args:
+        config: Fleet distribution configuration (may contain SweepSpec)
+
+    Yields:
+        (sweep_value, config) pairs for each sweep point
+
+    Raises:
+        ConfigurationError: If no sweep spec found
+    """
+    sweep = detect_sweep_spec(config)
+    if sweep is None:
+        raise ConfigurationError(
+            "No sweep specification found in config. "
+            "Use proportional_to with type: sweep in multiplier."
+        )
+
+    for value in sweep.get_values():
+        yield value, _replace_sweep_with_value(config, value)
 
 
 def load_config_yaml(path: Union[str, Path]) -> dict[str, Any]:
