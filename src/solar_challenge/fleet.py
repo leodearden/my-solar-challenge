@@ -3,7 +3,7 @@
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import pandas as pd
 
@@ -237,6 +237,33 @@ def _simulate_home_worker(
     return (home_index, results)
 
 
+def _simulate_home_worker_tagged(
+    sweep_index: int,
+    home_index: int,
+    home_config: HomeConfig,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    validate_balance: bool,
+) -> tuple[int, int, SimulationResults]:
+    """Worker with sweep tagging for cross-sweep parallel execution.
+
+    Must be top-level for pickle.
+
+    Args:
+        sweep_index: Index of the sweep iteration this job belongs to
+        home_index: Index of the home within the sweep
+        home_config: Configuration for the home
+        start_date: Start of simulation period
+        end_date: End of simulation period
+        validate_balance: Whether to validate energy balance
+
+    Returns:
+        Tuple of (sweep_index, home_index, SimulationResults)
+    """
+    results = simulate_home(home_config, start_date, end_date, validate_balance)
+    return (sweep_index, home_index, results)
+
+
 def simulate_fleet_iter(
     config: FleetConfig,
     start_date: pd.Timestamp,
@@ -372,4 +399,154 @@ def calculate_fleet_summary(results: FleetResults) -> FleetSummary:
         per_home_self_consumption_ratio_max=float(sc_series.max()),
         per_home_self_consumption_ratio_mean=float(sc_series.mean()),
         simulation_days=home_summaries[0].simulation_days if home_summaries else 0,
+    )
+
+
+def simulate_multi_sweep_iter(
+    sweep_configs: list[tuple[Any, FleetConfig]],
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    validate_balance: bool = True,
+    parallel: bool = True,
+    max_workers: int | None = None,
+) -> Iterator[tuple[int, int, SimulationResults]]:
+    """Submit all jobs from all sweeps to a single executor for maximum CPU utilization.
+
+    This function enables cross-sweep parallel execution: when sweep N's last batch
+    has only a few jobs, sweep N+1's jobs fill the remaining worker slots.
+
+    Args:
+        sweep_configs: List of (sweep_value, FleetConfig) pairs
+        start_date: Start of simulation period
+        end_date: End of simulation period (inclusive)
+        validate_balance: Whether to validate energy balance
+        parallel: Whether to run simulations in parallel
+        max_workers: Maximum number of parallel workers (defaults to CPU count)
+
+    Yields:
+        Tuples of (sweep_index, home_index, SimulationResults) as each completes
+    """
+    if not sweep_configs:
+        return
+
+    # Pre-warm weather cache using first home from first sweep
+    get_tmy_data(sweep_configs[0][1].homes[0].location, use_cache=True)
+
+    # Count total jobs
+    total_jobs = sum(len(cfg.homes) for _, cfg in sweep_configs)
+
+    if not parallel or total_jobs == 1:
+        # Sequential execution
+        for sweep_idx, (_, fleet_config) in enumerate(sweep_configs):
+            for home_idx, home in enumerate(fleet_config.homes):
+                result = simulate_home(home, start_date, end_date, validate_balance)
+                yield (sweep_idx, home_idx, result)
+    else:
+        # Parallel execution with all jobs in single pool
+        workers = max_workers or min(total_jobs, os.cpu_count() or 4)
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            futures = {}
+            for sweep_idx, (_, fleet_config) in enumerate(sweep_configs):
+                for home_idx, home in enumerate(fleet_config.homes):
+                    future = executor.submit(
+                        _simulate_home_worker_tagged,
+                        sweep_idx,
+                        home_idx,
+                        home,
+                        start_date,
+                        end_date,
+                        validate_balance,
+                    )
+                    futures[future] = (sweep_idx, home_idx)
+
+            for future in as_completed(futures):
+                yield future.result()
+
+
+@dataclass
+class MultiSweepResults:
+    """Results from multi-sweep simulation organized by sweep index.
+
+    Attributes:
+        sweep_results: Dict mapping sweep_index to (sweep_value, FleetResults)
+        sweep_values: List of sweep values in order
+    """
+
+    sweep_results: dict[int, tuple[Any, FleetResults]]
+    sweep_values: list[Any]
+
+    def __len__(self) -> int:
+        """Return number of sweeps."""
+        return len(self.sweep_results)
+
+    def __getitem__(self, sweep_index: int) -> tuple[Any, FleetResults]:
+        """Get (sweep_value, FleetResults) for a specific sweep."""
+        return self.sweep_results[sweep_index]
+
+    def iter_results(self) -> Iterator[tuple[Any, FleetResults]]:
+        """Iterate over (sweep_value, FleetResults) in sweep order."""
+        for i in range(len(self.sweep_values)):
+            yield self.sweep_results[i]
+
+
+def collect_multi_sweep_results(
+    sweep_configs: list[tuple[Any, FleetConfig]],
+    result_iter: Iterator[tuple[int, int, SimulationResults]],
+    on_sweep_complete: Optional[Callable[[int, Any, FleetResults], None]] = None,
+) -> MultiSweepResults:
+    """Collect results from multi-sweep iterator and organize by sweep.
+
+    Routes results to per-sweep buckets and calls callback when each sweep completes.
+
+    Args:
+        sweep_configs: List of (sweep_value, FleetConfig) pairs (same as passed to
+            simulate_multi_sweep_iter)
+        result_iter: Iterator from simulate_multi_sweep_iter
+        on_sweep_complete: Optional callback called when a sweep completes.
+            Receives (sweep_index, sweep_value, FleetResults).
+
+    Returns:
+        MultiSweepResults with organized results
+    """
+    n_sweeps = len(sweep_configs)
+
+    # Initialize per-sweep result buckets
+    # bucket[sweep_idx] = list of (home_idx, result) tuples
+    buckets: list[list[tuple[int, SimulationResults]]] = [[] for _ in range(n_sweeps)]
+    homes_per_sweep = [len(cfg.homes) for _, cfg in sweep_configs]
+    completed_sweeps: set[int] = set()
+
+    # Collect results
+    sweep_results: dict[int, tuple[Any, FleetResults]] = {}
+    sweep_values = [val for val, _ in sweep_configs]
+
+    for sweep_idx, home_idx, result in result_iter:
+        buckets[sweep_idx].append((home_idx, result))
+
+        # Check if this sweep is now complete
+        if sweep_idx not in completed_sweeps and len(buckets[sweep_idx]) == homes_per_sweep[sweep_idx]:
+            completed_sweeps.add(sweep_idx)
+
+            # Build FleetResults for this sweep
+            sweep_val, fleet_config = sweep_configs[sweep_idx]
+            bucket = buckets[sweep_idx]
+
+            # Sort by home_idx and extract results
+            bucket.sort(key=lambda x: x[0])
+            per_home_results = [r for _, r in bucket]
+
+            fleet_results = FleetResults(
+                per_home_results=per_home_results,
+                home_configs=fleet_config.homes,
+            )
+
+            sweep_results[sweep_idx] = (sweep_val, fleet_results)
+
+            # Call callback if provided
+            if on_sweep_complete is not None:
+                on_sweep_complete(sweep_idx, sweep_val, fleet_results)
+
+    return MultiSweepResults(
+        sweep_results=sweep_results,
+        sweep_values=sweep_values,
     )

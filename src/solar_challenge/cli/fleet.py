@@ -31,7 +31,9 @@ from solar_challenge.fleet import (
     FleetConfig,
     FleetResults,
     calculate_fleet_summary,
+    collect_multi_sweep_results,
     simulate_fleet_iter,
+    simulate_multi_sweep_iter,
 )
 from solar_challenge.home import SimulationResults
 from solar_challenge.location import Location
@@ -291,7 +293,10 @@ def sweep(
     if output_dir is not None:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Determine sweep mode
+    # Build sweep configs upfront
+    sweep_configs: list[tuple[float, FleetConfig]] = []
+    param_name: str = "multiplier"  # Default for YAML sweep
+
     if param is not None:
         # CLI-driven sweep
         if min_val is None or max_val is None:
@@ -300,16 +305,13 @@ def sweep(
             )
         sweep_spec = SweepSpec(min=min_val, max=max_val, steps=steps, mode=mode)
         sweep_values = sweep_spec.get_values()
+        param_name = param
         print_info(
             f"CLI sweep: {param} from {min_val} to {max_val} "
             f"({steps} steps, {mode})"
         )
 
-        results_summary: list[dict] = []
-        for i, val in enumerate(sweep_values):
-            print_info(f"[{i+1}/{len(sweep_values)}] {param}={val:.4f}")
-
-            # Substitute variable and load config
+        for val in sweep_values:
             substituted = substitute_config_variables(raw_config, {param: val})
             if "fleet_distribution" not in substituted:
                 raise ConfigurationError(
@@ -320,27 +322,7 @@ def sweep(
             )
             homes = generate_homes_from_distribution(dist_config, location)
             fleet_config = FleetConfig(homes=homes, name=f"{param}={val:.4f}")
-
-            # Run simulation
-            results = _run_fleet_simulation(
-                fleet_config, start_date, end_date,
-                parallel=not sequential, max_workers=workers
-            )
-            summary = calculate_fleet_summary(results)
-            results_summary.append({
-                "sweep_value": val,
-                "param": param,
-                "self_consumption_ratio": summary.fleet_self_consumption_ratio,
-                "total_generation_kwh": summary.total_generation_kwh,
-                "total_consumption_kwh": summary.total_demand_kwh,
-                "grid_import_kwh": summary.total_grid_import_kwh,
-                "grid_export_kwh": summary.total_grid_export_kwh,
-            })
-
-            # Save individual result if output_dir specified
-            if output_dir is not None:
-                output_file = output_dir / f"{param}_{val:.4f}.csv"
-                _export_fleet_results(results, output_file)
+            sweep_configs.append((val, fleet_config))
 
     else:
         # YAML-defined sweep
@@ -364,33 +346,66 @@ def sweep(
             f"({sweep_spec.steps} steps, {sweep_spec.mode})"
         )
 
-        results_summary = []
-        for i, (val, expanded_config) in enumerate(expand_sweep_configs(dist_config)):
-            print_info(f"[{i+1}/{len(sweep_values)}] multiplier={val:.4f}")
-
+        for val, expanded_config in expand_sweep_configs(dist_config):
             homes = generate_homes_from_distribution(expanded_config, location)
             fleet_config = FleetConfig(homes=homes, name=f"multiplier={val:.4f}")
+            sweep_configs.append((val, fleet_config))
 
-            # Run simulation
-            results = _run_fleet_simulation(
-                fleet_config, start_date, end_date,
-                parallel=not sequential, max_workers=workers
-            )
-            summary = calculate_fleet_summary(results)
-            results_summary.append({
-                "sweep_value": val,
-                "param": "multiplier",
-                "self_consumption_ratio": summary.fleet_self_consumption_ratio,
-                "total_generation_kwh": summary.total_generation_kwh,
-                "total_consumption_kwh": summary.total_demand_kwh,
-                "grid_import_kwh": summary.total_grid_import_kwh,
-                "grid_export_kwh": summary.total_grid_export_kwh,
-            })
+    # Calculate totals
+    n_sweeps = len(sweep_configs)
+    total_homes = sum(len(cfg.homes) for _, cfg in sweep_configs)
 
-            # Save individual result if output_dir specified
-            if output_dir is not None:
-                output_file = output_dir / f"multiplier_{val:.4f}.csv"
-                _export_fleet_results(results, output_file)
+    print_info(f"Simulating {n_sweeps} sweeps ({total_homes} total homes)")
+
+    # Run multi-sweep simulation with cross-sweep parallelism
+    results_summary: list[dict] = []
+
+    def on_sweep_complete(sweep_idx: int, sweep_val: float, fleet_results: FleetResults) -> None:
+        """Handle completed sweep: save results and update summary."""
+        summary = calculate_fleet_summary(fleet_results)
+        results_summary.append({
+            "sweep_value": sweep_val,
+            "param": param_name,
+            "self_consumption_ratio": summary.fleet_self_consumption_ratio,
+            "total_generation_kwh": summary.total_generation_kwh,
+            "total_consumption_kwh": summary.total_demand_kwh,
+            "grid_import_kwh": summary.total_grid_import_kwh,
+            "grid_export_kwh": summary.total_grid_export_kwh,
+        })
+
+        # Save individual result if output_dir specified
+        if output_dir is not None:
+            if param is not None:
+                output_file = output_dir / f"{param}_{sweep_val:.4f}.csv"
+            else:
+                output_file = output_dir / f"multiplier_{sweep_val:.4f}.csv"
+            _export_fleet_results(fleet_results, output_file)
+
+    with create_fleet_progress() as progress:
+        task = progress.add_task(
+            f"Simulating {n_sweeps} sweeps ({total_homes} total homes)...",
+            total=total_homes
+        )
+
+        result_iter = simulate_multi_sweep_iter(
+            sweep_configs, start_date, end_date,
+            parallel=not sequential, max_workers=workers
+        )
+
+        # Wrap iterator to update progress
+        def progress_iter():
+            for item in result_iter:
+                progress.update(task, advance=1)
+                yield item
+
+        collect_multi_sweep_results(
+            sweep_configs,
+            progress_iter(),
+            on_sweep_complete=on_sweep_complete,
+        )
+
+    # Sort results by sweep value for consistent output
+    results_summary.sort(key=lambda x: x["sweep_value"])
 
     # Print summary table
     _print_sweep_summary(results_summary)
@@ -401,37 +416,6 @@ def sweep(
         summary_file = output_dir / "sweep_summary.csv"
         summary_df.to_csv(summary_file, index=False)
         print_success(f"Sweep summary saved to {summary_file}")
-
-
-def _run_fleet_simulation(
-    fleet_config: FleetConfig,
-    start_date: pd.Timestamp,
-    end_date: pd.Timestamp,
-    parallel: bool = True,
-    max_workers: Optional[int] = None,
-) -> FleetResults:
-    """Run fleet simulation and return results."""
-    n_homes = len(fleet_config.homes)
-    results_list: list[SimulationResults | None] = [None] * n_homes
-
-    with create_fleet_progress() as progress:
-        task = progress.add_task(f"Simulating {n_homes} homes...", total=n_homes)
-        for idx, result in simulate_fleet_iter(
-            fleet_config, start_date, end_date,
-            parallel=parallel, max_workers=max_workers
-        ):
-            results_list[idx] = result
-            progress.update(task, advance=1)
-
-    final_results: list[SimulationResults] = []
-    for r in results_list:
-        assert r is not None
-        final_results.append(r)
-
-    return FleetResults(
-        per_home_results=final_results,
-        home_configs=fleet_config.homes,
-    )
 
 
 def _print_sweep_summary(results: list[dict]) -> None:
