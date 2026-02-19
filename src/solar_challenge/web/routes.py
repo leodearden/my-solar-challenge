@@ -1,5 +1,6 @@
 """Flask Blueprint routes for the Solar Challenge web dashboard."""
 
+import html
 import io
 import tempfile
 import uuid
@@ -325,7 +326,7 @@ def download_csv() -> Response:
 
 @bp.route("/download/report", methods=["GET"])
 def download_report() -> Response:
-    """Stream simulation markdown report as a plain-text file download."""
+    """Return simulation report wrapped in a minimal HTML page for download."""
     result_key = session.get("result_key")
     if not result_key or result_key not in _result_cache:
         flash("No simulation results available. Please run a simulation first.", "error")
@@ -335,10 +336,30 @@ def download_report() -> Response:
     sim_results = cached["results"]
     home_name = cached.get("home_name", "Home")
 
-    report_text = generate_summary_report(sim_results, home_name)
+    report_markdown = generate_summary_report(sim_results, home_name)
+
+    # Escape the markdown text and render inside a minimal HTML page so that
+    # it is human-readable in a browser while still preserving all formatting.
+    escaped = html.escape(report_markdown)
+    page_title = html.escape(f"Simulation Report: {home_name}")
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{page_title}</title>
+  <style>
+    body {{ font-family: sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; color: #333; }}
+    pre {{ white-space: pre-wrap; word-wrap: break-word; background: #f8f8f8; padding: 1.5rem; border-radius: 4px; font-size: 0.9rem; line-height: 1.6; }}
+  </style>
+</head>
+<body>
+<pre>{escaped}</pre>
+</body>
+</html>"""
 
     return Response(
-        report_text,
-        mimetype="text/plain",
-        headers={"Content-Disposition": "attachment; filename=simulation_report.txt"},
+        html_content,
+        mimetype="text/html",
+        headers={"Content-Disposition": "attachment; filename=simulation_report.html"},
     )
