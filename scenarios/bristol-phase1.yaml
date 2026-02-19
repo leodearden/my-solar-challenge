@@ -14,6 +14,15 @@ location:
   altitude: 11.0
   name: Bristol, UK
 
+# Smart Export Guarantee (SEG) configuration
+# Option 1: specify a custom rate directly
+seg:
+  rate_pence_per_kwh: 4.1  # Octopus Energy export rate (p/kWh)
+
+# Option 2: use a named preset instead
+# seg:
+#   preset: Octopus  # Available presets: Octopus, British Gas, EDF, E.ON, Scottish Power, OVO
+
 fleet_distribution:
   n_homes: 100
   seed: 42
