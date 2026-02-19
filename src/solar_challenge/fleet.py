@@ -224,6 +224,10 @@ class FleetSummary:
 
     simulation_days: int
 
+    # SEG revenue aggregates (populated when seg_tariff_pence_per_kwh is provided)
+    total_seg_revenue_gbp: Optional[float] = None
+    per_home_seg_revenue_mean_gbp: Optional[float] = None
+
 
 def _simulate_home_worker(
     home_index: int,
@@ -349,18 +353,24 @@ def simulate_fleet(
     )
 
 
-def calculate_fleet_summary(results: FleetResults) -> FleetSummary:
+def calculate_fleet_summary(
+    results: FleetResults,
+    seg_tariff_pence_per_kwh: Optional[float] = None,
+) -> FleetSummary:
     """Calculate summary statistics for fleet simulation.
 
     Args:
         results: Fleet simulation results
+        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
+            If provided, SEG revenue is aggregated across all homes.
 
     Returns:
         FleetSummary with totals and distribution statistics
     """
     # Calculate per-home summaries
     home_summaries: list[SummaryStatistics] = [
-        calculate_summary(r) for r in results.per_home_results
+        calculate_summary(r, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
+        for r in results.per_home_results
     ]
 
     # Fleet totals
@@ -382,6 +392,17 @@ def calculate_fleet_summary(results: FleetResults) -> FleetSummary:
     sc_ratios = [s.self_consumption_ratio for s in home_summaries]
     sc_series = pd.Series(sc_ratios)
 
+    # Aggregate SEG revenue if tariff was provided
+    total_seg_revenue_gbp: Optional[float] = None
+    per_home_seg_revenue_mean_gbp: Optional[float] = None
+    if seg_tariff_pence_per_kwh is not None:
+        seg_revenues = [
+            s.seg_revenue_gbp for s in home_summaries if s.seg_revenue_gbp is not None
+        ]
+        if seg_revenues:
+            total_seg_revenue_gbp = sum(seg_revenues)
+            per_home_seg_revenue_mean_gbp = total_seg_revenue_gbp / len(seg_revenues)
+
     return FleetSummary(
         n_homes=len(results),
         total_generation_kwh=total_gen,
@@ -399,6 +420,8 @@ def calculate_fleet_summary(results: FleetResults) -> FleetSummary:
         per_home_self_consumption_ratio_max=float(sc_series.max()),
         per_home_self_consumption_ratio_mean=float(sc_series.mean()),
         simulation_days=home_summaries[0].simulation_days if home_summaries else 0,
+        total_seg_revenue_gbp=total_seg_revenue_gbp,
+        per_home_seg_revenue_mean_gbp=per_home_seg_revenue_mean_gbp,
     )
 
 
