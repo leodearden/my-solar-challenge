@@ -383,6 +383,42 @@ body {
     margin-top: var(--spacing-lg);
 }
 
+/* --- Progress / Loading Indicator --- */
+.progress-container {
+    display: flex;
+    justify-content: center;
+}
+
+.progress-card {
+    width: 100%;
+    max-width: 480px;
+}
+
+.progress-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-xl) var(--spacing-lg);
+    text-align: center;
+}
+
+.progress-message {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.progress-hint {
+    font-size: 0.875rem;
+}
+
+.spinner--lg {
+    width: 2.5rem;
+    height: 2.5rem;
+    border-width: 3px;
+}
+
 /* --- Responsive Breakpoints --- */
 @media (max-width: 768px) {
     .nav-container {
