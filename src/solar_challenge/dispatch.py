@@ -8,7 +8,8 @@ batteries based on generation, demand, tariffs, and other factors.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from enum import Enum
+from typing import List, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -151,3 +152,177 @@ class SelfConsumptionStrategy(DispatchStrategy):
         else:
             # Generation exactly equals demand, no action needed
             return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
+
+
+class TariffPeriod(Enum):
+    """Enumeration of tariff periods for time-of-use strategies.
+
+    Attributes:
+        PEAK: Peak tariff period (higher electricity rates)
+        OFF_PEAK: Off-peak tariff period (lower electricity rates)
+    """
+
+    PEAK = "peak"
+    OFF_PEAK = "off_peak"
+
+
+class TOUOptimizedStrategy(DispatchStrategy):
+    """Time-of-use optimized dispatch strategy.
+
+    Optimizes battery operation based on tariff periods by:
+    - Charging battery during off-peak hours (from excess PV)
+    - Discharging battery during peak hours to offset demand and reduce costs
+    - Still opportunistically charging from excess PV even during peak hours
+
+    This strategy is designed for scenarios with time-of-use tariffs where
+    electricity costs vary by time of day.
+    """
+
+    def __init__(
+        self,
+        peak_hours: List[Tuple[int, int]],
+        off_peak_hours: Optional[List[Tuple[int, int]]] = None,
+    ) -> None:
+        """Initialize TOU-optimized strategy with tariff period definitions.
+
+        Args:
+            peak_hours: List of (start_hour, end_hour) tuples defining peak periods.
+                Hours are in 24-hour format (0-23). For example, [(17, 20)]
+                represents peak period from 5 PM to 8 PM.
+            off_peak_hours: Optional list of (start_hour, end_hour) tuples for
+                off-peak periods. If not specified, all non-peak hours are
+                considered off-peak.
+
+        Raises:
+            ValueError: If hour ranges are invalid (not 0-23, start >= end)
+        """
+        self._peak_hours = peak_hours
+        self._off_peak_hours = off_peak_hours
+
+        # Validate peak hours
+        for start, end in peak_hours:
+            if not (0 <= start < 24 and 0 <= end <= 24):
+                raise ValueError(
+                    f"Peak hours must be in range 0-23, got ({start}, {end})"
+                )
+            if start >= end:
+                raise ValueError(
+                    f"Peak period start must be before end, got ({start}, {end})"
+                )
+
+        # Validate off-peak hours if provided
+        if off_peak_hours is not None:
+            for start, end in off_peak_hours:
+                if not (0 <= start < 24 and 0 <= end <= 24):
+                    raise ValueError(
+                        f"Off-peak hours must be in range 0-23, got ({start}, {end})"
+                    )
+                if start >= end:
+                    raise ValueError(
+                        f"Off-peak period start must be before end, got ({start}, {end})"
+                    )
+
+    def _get_tariff_period(self, timestamp: datetime) -> TariffPeriod:
+        """Determine tariff period for given timestamp.
+
+        Args:
+            timestamp: Timestamp to check
+
+        Returns:
+            TariffPeriod.PEAK if timestamp falls within peak hours,
+            TariffPeriod.OFF_PEAK otherwise
+        """
+        hour = timestamp.hour
+
+        # Check if current hour falls within any peak period
+        for start, end in self._peak_hours:
+            if start <= hour < end:
+                return TariffPeriod.PEAK
+
+        # If off_peak_hours specified, verify it's in an off-peak period
+        if self._off_peak_hours is not None:
+            for start, end in self._off_peak_hours:
+                if start <= hour < end:
+                    return TariffPeriod.OFF_PEAK
+            # Not in peak or explicit off-peak, treat as off-peak by default
+            return TariffPeriod.OFF_PEAK
+
+        # Not in peak period, so it's off-peak
+        return TariffPeriod.OFF_PEAK
+
+    def decide_action(
+        self,
+        timestamp: datetime,
+        generation_kw: float,
+        demand_kw: float,
+        battery_soc_kwh: float,
+        battery_capacity_kwh: float,
+        timestep_minutes: float = 1.0,
+    ) -> DispatchDecision:
+        """Decide battery action based on time-of-use tariff optimization.
+
+        Args:
+            timestamp: Current simulation timestamp
+            generation_kw: PV generation power in kW
+            demand_kw: Demand/consumption power in kW
+            battery_soc_kwh: Current battery state of charge in kWh
+            battery_capacity_kwh: Total battery capacity in kWh
+            timestep_minutes: Duration of timestep in minutes
+
+        Returns:
+            DispatchDecision optimized for TOU tariffs:
+            - Off-peak: charge from excess PV
+            - Peak: discharge to meet demand, still charge from excess PV
+
+        Raises:
+            ValueError: If inputs are invalid (negative values, etc.)
+        """
+        # Validate inputs
+        if generation_kw < 0:
+            raise ValueError(
+                f"Generation must be non-negative, got {generation_kw} kW"
+            )
+        if demand_kw < 0:
+            raise ValueError(f"Demand must be non-negative, got {demand_kw} kW")
+        if battery_soc_kwh < 0:
+            raise ValueError(
+                f"Battery SOC must be non-negative, got {battery_soc_kwh} kWh"
+            )
+        if battery_capacity_kwh <= 0:
+            raise ValueError(
+                f"Battery capacity must be positive, got {battery_capacity_kwh} kWh"
+            )
+        if timestep_minutes <= 0:
+            raise ValueError(
+                f"Timestep must be positive, got {timestep_minutes} minutes"
+            )
+
+        # Determine current tariff period
+        tariff_period = self._get_tariff_period(timestamp)
+
+        # Calculate excess and shortfall
+        excess_kw = max(0.0, generation_kw - demand_kw)
+        shortfall_kw = max(0.0, demand_kw - generation_kw)
+
+        # Decision logic based on tariff period
+        if tariff_period == TariffPeriod.OFF_PEAK:
+            # Off-peak: charge from excess PV (like self-consumption)
+            if excess_kw > 0:
+                return DispatchDecision(charge_kw=excess_kw, discharge_kw=0.0)
+            elif shortfall_kw > 0:
+                # During off-peak, we could potentially charge from grid here
+                # but for simplicity, just discharge to meet demand
+                return DispatchDecision(charge_kw=0.0, discharge_kw=shortfall_kw)
+            else:
+                return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
+        else:
+            # Peak period: discharge to offset demand, charge from excess PV
+            if excess_kw > 0:
+                # Free PV energy available - charge even during peak
+                return DispatchDecision(charge_kw=excess_kw, discharge_kw=0.0)
+            elif shortfall_kw > 0:
+                # Demand exceeds generation - discharge to reduce grid import
+                return DispatchDecision(charge_kw=0.0, discharge_kw=shortfall_kw)
+            else:
+                # Generation equals demand
+                return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
