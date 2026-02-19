@@ -43,6 +43,10 @@ dev = [
 stochastic = [
     "richardsonpy>=0.2.0",
 ]
+web = [
+    "flask>=3.0.0",
+    "plotly>=5.0.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

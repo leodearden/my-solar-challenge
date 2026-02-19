@@ -9,6 +9,7 @@ from solar_challenge.cli import config as config_app
 from solar_challenge.cli import fleet as fleet_app
 from solar_challenge.cli import home as home_app
 from solar_challenge.cli import validate as validate_app
+from solar_challenge.cli import web as web_app
 from solar_challenge.cli.utils import console
 
 # Create main app
@@ -23,6 +24,7 @@ app.add_typer(home_app.app, name="home")
 app.add_typer(fleet_app.app, name="fleet")
 app.add_typer(validate_app.app, name="validate")
 app.add_typer(config_app.app, name="config")
+app.add_typer(web_app.app, name="web")
 
 
 def version_callback(value: bool) -> None:
@@ -67,12 +69,14 @@ def main(
       fleet     Fleet (multiple homes) simulation
       validate  Validate results or config files
       config    Configuration management
+      web       Web dashboard server
 
     Examples:
       solar-challenge home quick 4 5 --days 7
       solar-challenge home run config.yaml --report
       solar-challenge fleet bristol-phase1 --days 30
       solar-challenge config template home -o my-config.yaml
+      solar-challenge web start --port 8080
     """
     # Store verbose/quiet in context for subcommands
     # In practice, subcommands can check these via the context if needed

@@ -1,0 +1,22 @@
+{#
+    progress.html — HTMX partial shown while the simulation is running.
+
+    This partial can be rendered immediately by POST /simulate before long-running
+    work begins, then replaced with results.html once complete.  Alternatively it
+    is used as an out-of-band indicator alongside the HTMX loading state on the
+    submit button.
+
+    No template variables required.
+#}
+
+<div class="progress-container mt-lg" id="progress-indicator" aria-live="polite">
+    <div class="card progress-card">
+        <div class="progress-inner">
+            <span class="spinner spinner--lg" aria-hidden="true"></span>
+            <p class="progress-message">Running simulation&hellip;</p>
+            <p class="text-muted progress-hint">
+                This may take a few seconds depending on the simulation period.
+            </p>
+        </div>
+    </div>
+</div>
