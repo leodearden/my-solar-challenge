@@ -326,3 +326,101 @@ class TOUOptimizedStrategy(DispatchStrategy):
             else:
                 # Generation equals demand
                 return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
+
+
+class PeakShavingStrategy(DispatchStrategy):
+    """Peak shaving dispatch strategy.
+
+    Limits grid import to a configurable threshold by:
+    - Charging battery from excess PV (generation > demand)
+    - Discharging battery when grid import would exceed the threshold
+    - Shaving demand peaks to reduce grid stress and capacity charges
+
+    This strategy is designed for scenarios where grid connection capacity
+    is limited or where demand charges incentivize reducing peak import.
+    """
+
+    def __init__(self, import_limit_kw: float) -> None:
+        """Initialize peak shaving strategy with grid import threshold.
+
+        Args:
+            import_limit_kw: Maximum allowed grid import in kW. Battery will
+                discharge to keep grid import at or below this level.
+
+        Raises:
+            ValueError: If import_limit_kw is not positive
+        """
+        if import_limit_kw <= 0:
+            raise ValueError(
+                f"Import limit must be positive, got {import_limit_kw} kW"
+            )
+        self._import_limit_kw = import_limit_kw
+
+    def decide_action(
+        self,
+        timestamp: datetime,
+        generation_kw: float,
+        demand_kw: float,
+        battery_soc_kwh: float,
+        battery_capacity_kwh: float,
+        timestep_minutes: float = 1.0,
+    ) -> DispatchDecision:
+        """Decide battery action to limit grid import below threshold.
+
+        Args:
+            timestamp: Current simulation timestamp
+            generation_kw: PV generation power in kW
+            demand_kw: Demand/consumption power in kW
+            battery_soc_kwh: Current battery state of charge in kWh
+            battery_capacity_kwh: Total battery capacity in kWh
+            timestep_minutes: Duration of timestep in minutes
+
+        Returns:
+            DispatchDecision with:
+            - charge_kw if excess PV available
+            - discharge_kw to reduce grid import below threshold
+            - both zero if generation meets demand within threshold
+
+        Raises:
+            ValueError: If inputs are invalid (negative values, etc.)
+        """
+        # Validate inputs
+        if generation_kw < 0:
+            raise ValueError(
+                f"Generation must be non-negative, got {generation_kw} kW"
+            )
+        if demand_kw < 0:
+            raise ValueError(f"Demand must be non-negative, got {demand_kw} kW")
+        if battery_soc_kwh < 0:
+            raise ValueError(
+                f"Battery SOC must be non-negative, got {battery_soc_kwh} kWh"
+            )
+        if battery_capacity_kwh <= 0:
+            raise ValueError(
+                f"Battery capacity must be positive, got {battery_capacity_kwh} kWh"
+            )
+        if timestep_minutes <= 0:
+            raise ValueError(
+                f"Timestep must be positive, got {timestep_minutes} minutes"
+            )
+
+        # Calculate excess and shortfall
+        excess_kw = max(0.0, generation_kw - demand_kw)
+        shortfall_kw = max(0.0, demand_kw - generation_kw)
+
+        # Decision logic based on excess/shortfall and import threshold
+        if excess_kw > 0:
+            # Charge from excess PV
+            return DispatchDecision(charge_kw=excess_kw, discharge_kw=0.0)
+        elif shortfall_kw > 0:
+            # Check if grid import would exceed threshold
+            if shortfall_kw > self._import_limit_kw:
+                # Discharge to shave peak: reduce import to threshold
+                peak_shave_kw = shortfall_kw - self._import_limit_kw
+                return DispatchDecision(charge_kw=0.0, discharge_kw=peak_shave_kw)
+            else:
+                # Shortfall is below threshold, no battery action needed
+                return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
+        else:
+            # Generation exactly equals demand
+            return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
