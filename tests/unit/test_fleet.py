@@ -237,6 +237,27 @@ class TestFleetSummary:
         # Grid dependency = 0 (no imports)
         assert summary.fleet_grid_dependency_ratio == 0.0
 
+    def test_SEG_aggregates_with_tariff(self, sample_results):
+        """SEG revenue totals and mean are computed when tariff is provided."""
+        # Per-home grid_export: [1.0, 2.0, 3.0] kW constant for 24 h
+        # Per-home export kWh: [24, 48, 72]
+        # At 15p/kWh: [3.60, 7.20, 10.80] GBP
+        # total = 21.60, mean = 7.20
+        summary = calculate_fleet_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
+
+        assert summary.total_seg_revenue_gbp is not None
+        assert summary.total_seg_revenue_gbp == pytest.approx(21.60, rel=0.01)
+
+        assert summary.per_home_seg_revenue_mean_gbp is not None
+        assert summary.per_home_seg_revenue_mean_gbp == pytest.approx(7.20, rel=0.01)
+
+    def test_SEG_aggregates_without_tariff(self, sample_results):
+        """SEG revenue fields are None when no tariff is provided."""
+        summary = calculate_fleet_summary(sample_results)
+
+        assert summary.total_seg_revenue_gbp is None
+        assert summary.per_home_seg_revenue_mean_gbp is None
+
 
 class TestSimulateFleetIter:
     """Test simulate_fleet_iter iterator function."""
