@@ -1,7 +1,10 @@
 """Battery storage configuration and modelling."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from solar_challenge.config import DispatchStrategyConfig
 
 
 @dataclass(frozen=True)
@@ -13,12 +16,14 @@ class BatteryConfig:
         max_charge_kw: Maximum charging power in kilowatts
         max_discharge_kw: Maximum discharging power in kilowatts
         name: Optional identifier for the battery
+        dispatch_strategy: Optional dispatch strategy configuration
     """
 
     capacity_kwh: float
     max_charge_kw: float = 2.5
     max_discharge_kw: float = 2.5
     name: str = ""
+    dispatch_strategy: Optional["DispatchStrategyConfig"] = None
 
     def __post_init__(self) -> None:
         """Validate battery configuration parameters."""

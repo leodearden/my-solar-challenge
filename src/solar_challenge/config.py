@@ -550,11 +550,18 @@ def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryCon
     """Parse battery configuration from config data."""
     if data is None:
         return None
+
+    # Parse dispatch strategy if present
+    dispatch_strategy = None
+    if "dispatch_strategy" in data:
+        dispatch_strategy = _parse_dispatch_strategy_config(data["dispatch_strategy"])
+
     return BatteryConfig(
         capacity_kwh=data.get("capacity_kwh", 5.0),
         max_charge_kw=data.get("max_charge_kw", 2.5),
         max_discharge_kw=data.get("max_discharge_kw", 2.5),
         name=data.get("name", ""),
+        dispatch_strategy=dispatch_strategy,
     )
 
 
