@@ -346,6 +346,30 @@ body {
     color: var(--color-text-muted);
 }
 
+/* --- Page Intro --- */
+.page-intro {
+    margin-bottom: var(--spacing-xl);
+}
+
+.page-title {
+    font-size: 1.75rem;
+    font-weight: 800;
+    color: var(--color-text);
+    margin-bottom: var(--spacing-sm);
+}
+
+.page-subtitle {
+    font-size: 1rem;
+}
+
+/* --- Form Actions --- */
+.form-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
 /* --- Utility Classes --- */
 .text-muted {
     color: var(--color-text-muted);
