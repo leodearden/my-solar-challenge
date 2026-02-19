@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Solar Challenge Dashboard{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <!-- HTMX for dynamic form submissions without writing JavaScript -->
+    <script src="https://unpkg.com/htmx.org@1.9.10" integrity="sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5ViYgSibmK" crossorigin="anonymous"></script>
+    <!-- Plotly.js for interactive energy charts -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <header class="site-header">
+        <nav class="nav-container">
+            <a href="{{ url_for('main.index') }}" class="nav-brand">
+                ☀️ Solar Challenge
+            </a>
+            <ul class="nav-links">
+                <li><a href="{{ url_for('main.index') }}">Simulator</a></li>
+            </ul>
+        </nav>
+    </header>
+
+    <main class="main-content">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="flash flash--{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="site-footer">
+        <div class="footer-container">
+            <p>Solar Challenge &mdash; Community energy simulation tool</p>
+        </div>
+    </footer>
+</body>
+</html>
