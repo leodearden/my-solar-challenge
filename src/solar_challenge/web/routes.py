@@ -20,7 +20,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
-from solar_challenge.output import generate_summary_report
+from solar_challenge.output import aggregate_daily, generate_summary_report
 from solar_challenge.pv import PVConfig
 
 bp = Blueprint("main", __name__)
@@ -28,6 +28,130 @@ bp = Blueprint("main", __name__)
 # In-memory result cache keyed by session result_key.
 # Suitable for single-process deployment (dev/demo use).
 _result_cache: dict[str, Any] = {}
+
+# UK location presets available from the web form.
+_LOCATION_PRESETS: dict[str, Location] = {
+    "bristol": Location(
+        latitude=51.45, longitude=-2.58,
+        timezone="Europe/London", altitude=11.0, name="Bristol, UK",
+    ),
+    "london": Location(
+        latitude=51.51, longitude=-0.13,
+        timezone="Europe/London", altitude=11.0, name="London, UK",
+    ),
+    "edinburgh": Location(
+        latitude=55.95, longitude=-3.19,
+        timezone="Europe/London", altitude=47.0, name="Edinburgh, UK",
+    ),
+    "manchester": Location(
+        latitude=53.48, longitude=-2.24,
+        timezone="Europe/London", altitude=38.0, name="Manchester, UK",
+    ),
+}
+
+
+def _request_data() -> dict[str, str]:
+    """Return a unified string dict from form data or JSON body.
+
+    Supports both HTMX form submissions (application/x-www-form-urlencoded)
+    and direct JSON API calls (application/json).
+    """
+    if request.is_json:
+        raw = request.get_json(silent=True) or {}
+        return {k: str(v) for k, v in raw.items()}
+    # form is an ImmutableMultiDict — convert to a plain dict of first values
+    return {k: v for k, v in request.form.items()}
+
+
+def _resolve_location(preset_str: str) -> Location:
+    """Map a location string to a Location instance.
+
+    Accepts preset names (bristol, london, edinburgh, manchester) or
+    a 'lat,lon' string.  Falls back to Bristol on parse errors.
+    """
+    key = preset_str.strip().lower()
+    if key in _LOCATION_PRESETS:
+        return _LOCATION_PRESETS[key]
+    try:
+        lat, lon = map(float, key.split(","))
+        return Location(latitude=lat, longitude=lon)
+    except ValueError:
+        return Location.bristol()
+
+
+def _build_energy_chart_json(daily: pd.DataFrame) -> str:
+    """Build a Plotly grouped-bar chart JSON figure for daily energy flows."""
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    dates = [d.strftime("%Y-%m-%d") for d in daily.index]
+
+    series: list[tuple[str, str, str]] = [
+        ("generation_kwh", "Generation", "#f5a623"),
+        ("demand_kwh", "Demand", "#d0021b"),
+        ("self_consumption_kwh", "Self-Consumption", "#7ed321"),
+        ("grid_import_kwh", "Grid Import", "#9b9b9b"),
+        ("grid_export_kwh", "Grid Export", "#4a90e2"),
+    ]
+
+    traces: list[Any] = []
+    for col, name, color in series:
+        if col in daily.columns:
+            traces.append(
+                go.Bar(
+                    name=name,
+                    x=dates,
+                    y=daily[col].round(3).tolist(),
+                    marker_color=color,
+                )
+            )
+
+    layout = go.Layout(
+        barmode="group",
+        xaxis={"title": "Date", "type": "category"},
+        yaxis={"title": "Energy (kWh)"},
+        legend={"orientation": "h", "y": -0.25},
+        margin={"l": 50, "r": 20, "t": 20, "b": 100},
+        height=420,
+    )
+
+    fig = go.Figure(data=traces, layout=layout)
+    return fig.to_json()
+
+
+def _build_battery_chart_json(results: Any) -> str:
+    """Build a Plotly line chart JSON figure for battery state of charge."""
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    # Hourly averages keep the chart readable without overwhelming the browser.
+    soc_hourly = results.battery_soc.resample("h").mean()
+    dates = [d.isoformat() for d in soc_hourly.index]
+    values = soc_hourly.round(4).tolist()
+
+    trace = go.Scatter(
+        name="Battery SOC",
+        x=dates,
+        y=values,
+        mode="lines",
+        fill="tozeroy",
+        line={"color": "#7ed321", "width": 1.5},
+        fillcolor="rgba(126,211,33,0.15)",
+    )
+
+    layout = go.Layout(
+        xaxis={"title": "Time"},
+        yaxis={"title": "State of Charge (kWh)"},
+        margin={"l": 50, "r": 20, "t": 20, "b": 60},
+        height=350,
+    )
+
+    fig = go.Figure(data=[trace], layout=layout)
+    return fig.to_json()
 
 
 @bp.route("/", methods=["GET"])
@@ -37,39 +161,55 @@ def index() -> str:
 
 
 @bp.route("/simulate", methods=["POST"])
-def simulate():
-    """Run simulation with posted form data and store results in cache."""
+def simulate() -> Any:
+    """Run simulation and return the results HTML partial (for HTMX injection)."""
     try:
-        # Parse form data with sensible defaults
-        pv_kw = float(request.form.get("pv_kw", 4.0))
-        battery_kwh = float(request.form.get("battery_kwh", 0.0))
-        consumption_kwh_raw = request.form.get("consumption_kwh", "")
-        occupants = int(request.form.get("occupants", 3))
-        start = request.form.get("start", "2024-01-01")
-        end = request.form.get("end", "2024-12-31")
-        location_preset = request.form.get("location", "bristol")
+        data = _request_data()
 
-        # Resolve location
-        if location_preset == "bristol":
-            loc = Location.bristol()
+        # --- Parse parameters ---
+        pv_kw = float(data.get("pv_kw", 4.0))
+        battery_kwh_val = float(data.get("battery_kwh", 0.0))
+        consumption_kwh_raw = data.get("consumption_kwh", "").strip()
+        occupants = int(data.get("occupants", 3))
+        location_preset = data.get("location", "bristol")
+
+        # Support 'days' shorthand (HTMX form & JSON API) or explicit start/end dates.
+        days_raw = data.get("days", "").strip()
+        start_raw = data.get("start", "").strip()
+        end_raw = data.get("end", "").strip()
+
+        if days_raw:
+            days = int(days_raw)
+            if days == 365:
+                start = "2024-01-01"
+                end = "2024-12-31"
+            else:
+                ref = pd.Timestamp("2024-06-01")
+                start = ref.strftime("%Y-%m-%d")
+                end = (ref + pd.Timedelta(days=days - 1)).strftime("%Y-%m-%d")
         else:
-            try:
-                lat, lon = map(float, location_preset.split(","))
-                loc = Location(latitude=lat, longitude=lon)
-            except ValueError:
-                loc = Location.bristol()
+            start = start_raw or "2024-01-01"
+            end = end_raw or "2024-12-31"
 
-        # Build PV config
+        # --- Validate inputs ---
+        if not (0.5 <= pv_kw <= 20.0):
+            raise ValueError(f"PV capacity must be 0.5–20 kW, got {pv_kw}")
+        if battery_kwh_val < 0:
+            raise ValueError(f"Battery capacity cannot be negative, got {battery_kwh_val}")
+
+        # --- Resolve location ---
+        loc = _resolve_location(location_preset)
+
+        # --- Build component configs ---
         pv_config = PVConfig(capacity_kw=pv_kw)
 
-        # Build battery config (omit if zero capacity)
-        battery_config = None
-        if battery_kwh > 0:
-            battery_config = BatteryConfig(capacity_kwh=battery_kwh)
+        has_battery = battery_kwh_val > 0
+        battery_config: BatteryConfig | None = None
+        if has_battery:
+            battery_config = BatteryConfig(capacity_kwh=battery_kwh_val)
 
-        # Build load config (annual consumption optional; derive from occupants if blank)
         annual_consumption: float | None = None
-        if consumption_kwh_raw.strip():
+        if consumption_kwh_raw:
             annual_consumption = float(consumption_kwh_raw)
 
         load_config = LoadConfig(
@@ -77,7 +217,6 @@ def simulate():
             household_occupants=occupants,
         )
 
-        # Assemble home config
         home_config = HomeConfig(
             pv_config=pv_config,
             load_config=load_config,
@@ -86,25 +225,20 @@ def simulate():
             name="Web Simulation",
         )
 
-        # Parse simulation dates
+        # --- Run simulation ---
         start_date = pd.Timestamp(start, tz=loc.timezone)
         end_date = pd.Timestamp(end, tz=loc.timezone)
 
-        # Run simulation
         results = simulate_home(home_config, start_date, end_date)
         summary = calculate_summary(results)
 
-        # Cache results with a unique key
-        result_key = str(uuid.uuid4())
-        _result_cache[result_key] = {
-            "results": results,
-            "summary": summary,
-            "home_name": home_config.name,
-        }
+        # --- Aggregate daily and build chart JSON ---
+        daily = aggregate_daily(results)
+        energy_chart_json = _build_energy_chart_json(daily)
+        battery_chart_json = _build_battery_chart_json(results) if has_battery else None
 
-        # Store key and serialisable summary stats in session
-        session["result_key"] = result_key
-        session["summary"] = {
+        # --- Serialise summary for session / template ---
+        summary_dict: dict[str, Any] = {
             "total_generation_kwh": round(summary.total_generation_kwh, 2),
             "total_demand_kwh": round(summary.total_demand_kwh, 2),
             "total_self_consumption_kwh": round(summary.total_self_consumption_kwh, 2),
@@ -120,7 +254,34 @@ def simulate():
             "simulation_days": summary.simulation_days,
         }
 
-        return redirect(url_for("main.results"))
+        # --- Cache raw results for CSV / report downloads ---
+        result_key = str(uuid.uuid4())
+        _result_cache[result_key] = {
+            "results": results,
+            "summary": summary,
+            "home_name": home_config.name,
+        }
+
+        session["result_key"] = result_key
+        session["summary"] = summary_dict
+        session["has_battery"] = has_battery
+
+        return render_template(
+            "partials/results.html",
+            summary=summary_dict,
+            energy_chart_json=energy_chart_json,
+            battery_chart_json=battery_chart_json,
+            has_battery=has_battery,
+        )
+
+    except ValueError as exc:
+        error_html = (
+            '<div class="card" role="alert"'
+            ' style="border-left:4px solid #d0021b;padding:1rem;">'
+            f"<strong>Validation error:</strong> {exc}"
+            "</div>"
+        )
+        return Response(error_html, status=400, mimetype="text/html")
 
     except Exception as exc:  # noqa: BLE001
         flash(f"Simulation failed: {exc}", "error")
@@ -128,8 +289,8 @@ def simulate():
 
 
 @bp.route("/results", methods=["GET"])
-def results():
-    """Display simulation results page."""
+def results() -> Any:
+    """Display simulation results page (fallback for non-HTMX access)."""
     if "result_key" not in session:
         flash("No simulation results found. Please run a simulation first.", "info")
         return redirect(url_for("main.index"))
