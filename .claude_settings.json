@@ -1,0 +1,39 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(/home/leo/src/my-solar-challenge/.auto-claude/worktrees/tasks/009-web-based-dashboard/**)",
+      "Write(/home/leo/src/my-solar-challenge/.auto-claude/worktrees/tasks/009-web-based-dashboard/**)",
+      "Edit(/home/leo/src/my-solar-challenge/.auto-claude/worktrees/tasks/009-web-based-dashboard/**)",
+      "Glob(/home/leo/src/my-solar-challenge/.auto-claude/worktrees/tasks/009-web-based-dashboard/**)",
+      "Grep(/home/leo/src/my-solar-challenge/.auto-claude/worktrees/tasks/009-web-based-dashboard/**)",
+      "Read(/home/leo/src/my-solar-challenge/.auto-claude/worktrees/tasks/009-web-based-dashboard/.auto-claude/specs/009-web-based-dashboard/**)",
+      "Write(/home/leo/src/my-solar-challenge/.auto-claude/worktrees/tasks/009-web-based-dashboard/.auto-claude/specs/009-web-based-dashboard/**)",
+      "Edit(/home/leo/src/my-solar-challenge/.auto-claude/worktrees/tasks/009-web-based-dashboard/.auto-claude/specs/009-web-based-dashboard/**)",
+      "Read(/home/leo/src/my-solar-challenge/.auto-claude/**)",
+      "Write(/home/leo/src/my-solar-challenge/.auto-claude/**)",
+      "Edit(/home/leo/src/my-solar-challenge/.auto-claude/**)",
+      "Glob(/home/leo/src/my-solar-challenge/.auto-claude/**)",
+      "Grep(/home/leo/src/my-solar-challenge/.auto-claude/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__query-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}
