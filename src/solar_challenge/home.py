@@ -96,6 +96,7 @@ class SummaryStatistics:
     grid_dependency_ratio: float  # grid_import / demand
     export_ratio: float  # grid_export / generation
     simulation_days: int
+    seg_revenue_gbp: Optional[float] = None
 
 
 def simulate_home(
@@ -244,11 +245,16 @@ def _align_tmy_to_demand(
     return pd.Series(aligned_values, index=demand.index, name="generation_kw")
 
 
-def calculate_summary(results: SimulationResults) -> SummaryStatistics:
+def calculate_summary(
+    results: SimulationResults,
+    seg_tariff_pence_per_kwh: Optional[float] = None,
+) -> SummaryStatistics:
     """Calculate summary statistics from simulation results.
 
     Args:
         results: Simulation results with time series
+        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
+            If provided, seg_revenue_gbp is computed from total grid export.
 
     Returns:
         SummaryStatistics with totals and ratios
@@ -275,6 +281,11 @@ def calculate_summary(results: SimulationResults) -> SummaryStatistics:
     # Calculate simulation duration
     sim_days = (results.generation.index[-1] - results.generation.index[0]).days + 1
 
+    # Calculate SEG revenue if tariff is provided
+    seg_revenue_gbp: Optional[float] = None
+    if seg_tariff_pence_per_kwh is not None:
+        seg_revenue_gbp = total_export * seg_tariff_pence_per_kwh / 100.0
+
     return SummaryStatistics(
         total_generation_kwh=total_gen,
         total_demand_kwh=total_demand,
@@ -289,4 +300,5 @@ def calculate_summary(results: SimulationResults) -> SummaryStatistics:
         grid_dependency_ratio=grid_dependency_ratio,
         export_ratio=export_ratio,
         simulation_days=sim_days,
+        seg_revenue_gbp=seg_revenue_gbp,
     )
