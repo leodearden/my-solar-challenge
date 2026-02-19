@@ -58,6 +58,12 @@ More sophisticated power-sharing schemes are planned for future phases.
    python -c "import pvlib; import pandas; print('Setup OK')"
    ```
 
+4. (Optional) Install stochastic load profile support:
+   ```bash
+   pip install "solar-challenge[stochastic]"
+   ```
+   This installs `richardsonpy` for UK CREST-based stochastic household load profiles.
+
 ## Running Tests
 
 ```bash
@@ -107,7 +113,7 @@ See `long_running/solar-simulator/feature_list.json` for the complete list of fe
 
 ## License
 
-This project supports open-source principles. License details to be confirmed.
+This project is licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
 
 ## Contributing
 
