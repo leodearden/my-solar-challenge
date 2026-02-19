@@ -1,11 +1,13 @@
 """Energy flow calculations for PV and battery systems."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 import pandas as pd
 
 from solar_challenge.battery import Battery
+from solar_challenge.dispatch import DispatchStrategy, SelfConsumptionStrategy
 
 
 def calculate_self_consumption(
@@ -133,14 +135,16 @@ def simulate_timestep(
     demand_kw: float,
     battery: Optional[Battery],
     timestep_minutes: float = 1.0,
+    timestamp: Optional[datetime] = None,
+    strategy: Optional[DispatchStrategy] = None,
 ) -> EnergyFlowResult:
     """Simulate energy flow for a single timestep.
 
-    Energy flow priority:
+    Energy flow priority (default self-consumption strategy):
     1. PV generation meets demand directly (self-consumption)
-    2. Excess PV charges battery
+    2. Excess PV charges battery (if strategy allows)
     3. Remaining excess exports to grid
-    4. Shortfall draws from battery
+    4. Shortfall draws from battery (if strategy allows)
     5. Remaining shortfall imports from grid
 
     Args:
@@ -148,6 +152,8 @@ def simulate_timestep(
         demand_kw: Demand power in kW
         battery: Battery object (or None for no battery)
         timestep_minutes: Duration of timestep in minutes
+        timestamp: Current simulation timestamp (defaults to epoch if None)
+        strategy: Dispatch strategy to use (defaults to SelfConsumptionStrategy)
 
     Returns:
         EnergyFlowResult with all energy flows in kWh
@@ -168,15 +174,30 @@ def simulate_timestep(
     battery_soc = 0.0
 
     if battery is not None:
-        # Charge battery from excess
-        if excess_kwh > 0:
-            excess_power_kw = excess_kwh / duration_hours
-            battery_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
+        # Use strategy to decide battery action (default to self-consumption)
+        if strategy is None:
+            strategy = SelfConsumptionStrategy()
 
-        # Discharge battery to meet shortfall
-        if shortfall_kwh > 0:
-            shortfall_power_kw = shortfall_kwh / duration_hours
-            battery_discharge_kwh = battery.discharge(shortfall_power_kw, timestep_minutes)
+        # Use default timestamp if not provided
+        if timestamp is None:
+            timestamp = datetime(1970, 1, 1)  # Epoch
+
+        # Get dispatch decision from strategy
+        decision = strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=generation_kw,
+            demand_kw=demand_kw,
+            battery_soc_kwh=battery.soc_kwh,
+            battery_capacity_kwh=battery.config.capacity_kwh,
+            timestep_minutes=timestep_minutes,
+        )
+
+        # Execute battery charge/discharge based on strategy decision
+        if decision.charge_kw > 0:
+            battery_charge_kwh = battery.charge(decision.charge_kw, timestep_minutes)
+
+        if decision.discharge_kw > 0:
+            battery_discharge_kwh = battery.discharge(decision.discharge_kw, timestep_minutes)
 
         battery_soc = battery.soc_kwh
 
