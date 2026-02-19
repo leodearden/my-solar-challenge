@@ -1,6 +1,7 @@
 """Flask Blueprint routes for the Solar Challenge web dashboard."""
 
 import io
+import tempfile
 import uuid
 from typing import Any
 
@@ -20,7 +21,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import HomeConfig, calculate_summary, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
-from solar_challenge.output import aggregate_daily, generate_summary_report
+from solar_challenge.output import aggregate_daily, export_to_csv, generate_summary_report
 from solar_challenge.pv import PVConfig
 
 bp = Blueprint("main", __name__)
@@ -310,13 +311,13 @@ def download_csv() -> Response:
     cached = _result_cache[result_key]
     sim_results = cached["results"]
 
-    df: pd.DataFrame = sim_results.to_dataframe()
-    buffer = io.StringIO()
-    df.to_csv(buffer, index=True)
-    csv_data = buffer.getvalue()
+    # Use export_to_csv() to write to a temp file, then load into BytesIO buffer.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        csv_path = export_to_csv(sim_results, f"{tmpdir}/simulation_results.csv")
+        buffer = io.BytesIO(csv_path.read_bytes())
 
     return Response(
-        csv_data,
+        buffer.getvalue(),
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=simulation_results.csv"},
     )
