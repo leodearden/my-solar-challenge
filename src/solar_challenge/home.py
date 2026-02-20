@@ -168,6 +168,9 @@ def simulate_home(
     # Run timestep simulation
     results_list: list[EnergyFlowResult] = []
 
+    # Get index for timestamp lookup
+    index = minute_demand.index
+
     # Choose dispatch strategy
     use_tou_dispatch = (
         config.dispatch_strategy == "tou_optimized"
@@ -196,9 +199,6 @@ def simulate_home(
             validate_energy_balance(result)
 
         results_list.append(result)
-
-    # Convert results to time series
-    index = minute_demand.index
 
     # Convert energy (kWh) back to power (kW) for 1-minute timesteps
     # Energy in kWh for 1 minute = Power in kW * (1/60) hours
