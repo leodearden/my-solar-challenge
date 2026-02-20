@@ -90,10 +90,10 @@ class TariffPeriod:
         # Handle periods that cross midnight
         if start < end:
             # Normal period (e.g., 07:00-23:00)
-            return start <= time_of_day < end
+            return start <= time_of_day < end  # type: ignore[no-any-return]
         else:
             # Crosses midnight (e.g., 23:00-07:00)
-            return time_of_day >= start or time_of_day < end
+            return time_of_day >= start or time_of_day < end  # type: ignore[no-any-return]
 
 
 @dataclass(frozen=True)
