@@ -184,6 +184,17 @@ def simulate_home(
     # So Power in kW = Energy in kWh * 60
     conversion_factor = 60.0
 
+    # Calculate tariff costs if tariff is configured
+    if config.tariff_config is not None:
+        tariff_rates = [config.tariff_config.get_rate(ts) for ts in index]
+        import_costs = [r.grid_import * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
+        # Export revenue: use same rate as import for now (can be enhanced with separate export tariff)
+        export_revenues = [r.grid_export * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
+    else:
+        tariff_rates = [0.0 for _ in results_list]
+        import_costs = [0.0 for _ in results_list]
+        export_revenues = [0.0 for _ in results_list]
+
     return SimulationResults(
         generation=pd.Series(
             [r.generation * conversion_factor for r in results_list],
@@ -226,17 +237,17 @@ def simulate_home(
             name="grid_export_kw",
         ),
         import_cost=pd.Series(
-            [0.0 for _ in results_list],
+            import_costs,
             index=index,
             name="import_cost_gbp",
         ),
         export_revenue=pd.Series(
-            [0.0 for _ in results_list],
+            export_revenues,
             index=index,
             name="export_revenue_gbp",
         ),
         tariff_rate=pd.Series(
-            [0.0 for _ in results_list],
+            tariff_rates,
             index=index,
             name="tariff_rate_per_kwh",
         ),
