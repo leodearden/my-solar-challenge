@@ -1,0 +1,25 @@
+{
+  "active": true,
+  "spec": "003-smart-export-guarantee-seg-revenue-modelling",
+  "state": "error",
+  "subtasks": {
+    "completed": 8,
+    "total": 9,
+    "in_progress": 1,
+    "failed": 0
+  },
+  "phase": {
+    "current": "Tests",
+    "id": null,
+    "total": 3
+  },
+  "workers": {
+    "active": 0,
+    "max": 1
+  },
+  "session": {
+    "number": 61,
+    "started_at": "2026-02-20T11:31:31.453144"
+  },
+  "last_update": "2026-02-20T11:43:31.248543"
+}
