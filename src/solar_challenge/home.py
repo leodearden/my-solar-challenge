@@ -10,6 +10,7 @@ from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_e
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.weather import get_tmy_data
 
 
@@ -23,6 +24,7 @@ class HomeConfig:
         battery_config: Battery configuration (None for PV-only)
         location: Geographic location for weather data
         name: Optional identifier for the home
+        tariff_config: Tariff configuration (None for no cost tracking)
     """
 
     pv_config: PVConfig
@@ -30,6 +32,7 @@ class HomeConfig:
     battery_config: Optional[BatteryConfig] = None
     location: Location = Location.bristol()
     name: str = ""
+    tariff_config: Optional[TariffConfig] = None
 
 
 @dataclass

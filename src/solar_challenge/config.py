@@ -363,6 +363,7 @@ class ScenarioConfig:
         homes: List of home configurations (for fleet simulation)
         home: Single home configuration (for single-home simulation)
         output: Output preferences
+        tariff_config: Tariff configuration (None for no cost tracking)
     """
 
     name: str
@@ -372,6 +373,7 @@ class ScenarioConfig:
     homes: list[HomeConfig] = field(default_factory=list)
     home: Optional[HomeConfig] = None
     output: Optional[OutputConfig] = None
+    tariff_config: Optional[TariffConfig] = None
 
     def __post_init__(self) -> None:
         """Validate scenario configuration."""
@@ -623,6 +625,7 @@ def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
     pv_data = data.get("pv", {})
     battery_data = data.get("battery")
     load_data = data.get("load", {})
+    tariff_data = data.get("tariff")
 
     return HomeConfig(
         pv_config=_parse_pv_config(pv_data),
@@ -630,6 +633,7 @@ def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
         load_config=_parse_load_config(load_data),
         location=location,
         name=data.get("name", ""),
+        tariff_config=_parse_tariff_config(tariff_data),
     )
 
 
@@ -1073,6 +1077,7 @@ def generate_homes_from_distribution(
                 load_config=load_config,
                 location=location,
                 name=f"Home {i + 1}",
+                tariff_config=None,
             )
         )
 
@@ -1493,6 +1498,7 @@ def _apply_parameter_to_home(
             battery_config=home.battery_config,
             location=location,
             name=home.name,
+            tariff_config=home.tariff_config,
         )
     elif param_name in battery_params:
         battery_config = _modify_battery_config(home.battery_config, param_name, value)
@@ -1502,6 +1508,7 @@ def _apply_parameter_to_home(
             battery_config=battery_config,
             location=location,
             name=home.name,
+            tariff_config=home.tariff_config,
         )
     elif param_name in load_params:
         load_config = _modify_load_config(home.load_config, param_name, value)
@@ -1511,6 +1518,7 @@ def _apply_parameter_to_home(
             battery_config=home.battery_config,
             location=location,
             name=home.name,
+            tariff_config=home.tariff_config,
         )
     else:
         raise ConfigurationError(f"Unknown parameter for sweep: {param_name}")
