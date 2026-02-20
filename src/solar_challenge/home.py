@@ -53,6 +53,7 @@ class SimulationResults:
         battery_soc: Battery state of charge in kWh
         grid_import: Power imported from grid in kW
         grid_export: Power exported to grid in kW
+        strategy_name: Name of the dispatch strategy used
     """
 
     generation: pd.Series
@@ -63,6 +64,7 @@ class SimulationResults:
     battery_soc: pd.Series
     grid_import: pd.Series
     grid_export: pd.Series
+    strategy_name: str = "self_consumption"
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert results to DataFrame.
@@ -102,6 +104,7 @@ class SummaryStatistics:
     grid_dependency_ratio: float  # grid_import / demand
     export_ratio: float  # grid_export / generation
     simulation_days: int
+    strategy_name: str = "self_consumption"
 
 
 def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
@@ -216,6 +219,7 @@ def simulate_home(
     conversion_factor = 60.0
 
     return SimulationResults(
+        strategy_name=strategy.name,
         generation=pd.Series(
             [r.generation * conversion_factor for r in results_list],
             index=index,
@@ -332,4 +336,5 @@ def calculate_summary(results: SimulationResults) -> SummaryStatistics:
         grid_dependency_ratio=grid_dependency_ratio,
         export_ratio=export_ratio,
         simulation_days=sim_days,
+        strategy_name=results.strategy_name,
     )

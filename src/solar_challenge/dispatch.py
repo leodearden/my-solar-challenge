@@ -51,6 +51,12 @@ class DispatchStrategy(ABC):
     for each timestep.
     """
 
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """Human-readable name identifying this strategy."""
+        pass
+
     @abstractmethod
     def decide_action(
         self,
@@ -90,6 +96,11 @@ class SelfConsumptionStrategy(DispatchStrategy):
 
     This is the default strategy and replicates the original flow.py logic.
     """
+
+    @property
+    def name(self) -> str:
+        """Return strategy name."""
+        return "self_consumption"
 
     def decide_action(
         self,
@@ -177,6 +188,11 @@ class TOUOptimizedStrategy(DispatchStrategy):
     This strategy is designed for scenarios with time-of-use tariffs where
     electricity costs vary by time of day.
     """
+
+    @property
+    def name(self) -> str:
+        """Return strategy name."""
+        return "tou_optimized"
 
     def __init__(
         self,
@@ -339,6 +355,11 @@ class PeakShavingStrategy(DispatchStrategy):
     This strategy is designed for scenarios where grid connection capacity
     is limited or where demand charges incentivize reducing peak import.
     """
+
+    @property
+    def name(self) -> str:
+        """Return strategy name."""
+        return "peak_shaving"
 
     def __init__(self, import_limit_kw: float) -> None:
         """Initialize peak shaving strategy with grid import threshold.
