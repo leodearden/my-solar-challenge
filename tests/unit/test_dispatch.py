@@ -1,0 +1,1418 @@
+"""Tests for battery dispatch strategy framework."""
+
+import pytest
+from datetime import datetime
+from solar_challenge.dispatch import (
+    DispatchDecision,
+    DispatchStrategy,
+    SelfConsumptionStrategy,
+    TOUOptimizedStrategy,
+    PeakShavingStrategy,
+    TariffPeriod,
+)
+
+
+class TestDispatchDecisionBasics:
+    """Test basic DispatchDecision functionality."""
+
+    def test_create_with_charge(self):
+        """DispatchDecision can be created with charge power."""
+        decision = DispatchDecision(charge_kw=2.5, discharge_kw=0.0)
+        assert decision.charge_kw == 2.5
+        assert decision.discharge_kw == 0.0
+
+    def test_create_with_discharge(self):
+        """DispatchDecision can be created with discharge power."""
+        decision = DispatchDecision(charge_kw=0.0, discharge_kw=3.0)
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 3.0
+
+    def test_create_with_no_action(self):
+        """DispatchDecision can be created with no action."""
+        decision = DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+    def test_decision_is_frozen(self):
+        """DispatchDecision is immutable (frozen dataclass)."""
+        decision = DispatchDecision(charge_kw=1.0, discharge_kw=0.0)
+        with pytest.raises(Exception):  # FrozenInstanceError
+            decision.charge_kw = 2.0
+
+
+class TestDispatchDecisionValidation:
+    """Test DispatchDecision validation."""
+
+    def test_negative_charge_raises(self):
+        """Negative charge power raises error."""
+        with pytest.raises(ValueError, match="non-negative"):
+            DispatchDecision(charge_kw=-1.0, discharge_kw=0.0)
+
+    def test_negative_discharge_raises(self):
+        """Negative discharge power raises error."""
+        with pytest.raises(ValueError, match="non-negative"):
+            DispatchDecision(charge_kw=0.0, discharge_kw=-1.0)
+
+    def test_simultaneous_charge_discharge_raises(self):
+        """Cannot charge and discharge at the same time."""
+        with pytest.raises(ValueError, match="simultaneously"):
+            DispatchDecision(charge_kw=1.0, discharge_kw=1.0)
+
+    def test_simultaneous_small_values_raises(self):
+        """Even small simultaneous charge/discharge raises error."""
+        with pytest.raises(ValueError, match="simultaneously"):
+            DispatchDecision(charge_kw=0.1, discharge_kw=0.1)
+
+
+@pytest.fixture
+def timestamp():
+    """Create a sample timestamp for testing."""
+    return datetime(2024, 1, 1, 12, 0, 0)
+
+
+@pytest.fixture
+def self_consumption_strategy():
+    """Create a SelfConsumptionStrategy instance."""
+    return SelfConsumptionStrategy()
+
+
+class TestSelfConsumptionStrategyBasics:
+    """Test basic SelfConsumptionStrategy functionality."""
+
+    def test_can_instantiate(self, self_consumption_strategy):
+        """SelfConsumptionStrategy can be instantiated."""
+        assert isinstance(self_consumption_strategy, DispatchStrategy)
+        assert isinstance(self_consumption_strategy, SelfConsumptionStrategy)
+
+    def test_returns_dispatch_decision(self, self_consumption_strategy, timestamp):
+        """decide_action returns a DispatchDecision."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=2.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+        )
+        assert isinstance(decision, DispatchDecision)
+
+
+class TestSelfConsumptionStrategyExcessPV:
+    """Test self-consumption strategy with excess PV."""
+
+    def test_excess_pv_charges_battery(self, self_consumption_strategy, timestamp):
+        """When generation > demand, battery charges from excess."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Excess = 3.0 - 1.0 = 2.0 kW
+        assert decision.charge_kw == 2.0
+        assert decision.discharge_kw == 0.0
+
+    def test_large_excess_charges(self, self_consumption_strategy, timestamp):
+        """Large excess PV requests proportional charge."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=5.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Excess = 5.0 - 1.0 = 4.0 kW
+        assert decision.charge_kw == 4.0
+        assert decision.discharge_kw == 0.0
+
+    def test_small_excess_charges(self, self_consumption_strategy, timestamp):
+        """Small excess PV charges appropriately."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.1,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Excess = 1.1 - 1.0 = 0.1 kW
+        assert decision.charge_kw == pytest.approx(0.1)
+        assert decision.discharge_kw == 0.0
+
+    def test_excess_pv_zero_demand(self, self_consumption_strategy, timestamp):
+        """Excess with zero demand charges all generation."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=0.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Excess = 3.0 - 0.0 = 3.0 kW
+        assert decision.charge_kw == 3.0
+        assert decision.discharge_kw == 0.0
+
+
+class TestSelfConsumptionStrategyShortfall:
+    """Test self-consumption strategy with demand shortfall."""
+
+    def test_shortfall_discharges_battery(self, self_consumption_strategy, timestamp):
+        """When demand > generation, battery discharges to meet shortfall."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Shortfall = 3.0 - 1.0 = 2.0 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 2.0
+
+    def test_large_shortfall_discharges(self, self_consumption_strategy, timestamp):
+        """Large shortfall requests proportional discharge."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=5.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Shortfall = 5.0 - 1.0 = 4.0 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 4.0
+
+    def test_small_shortfall_discharges(self, self_consumption_strategy, timestamp):
+        """Small shortfall discharges appropriately."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=1.1,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Shortfall = 1.1 - 1.0 = 0.1 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == pytest.approx(0.1)
+
+    def test_shortfall_zero_generation(self, self_consumption_strategy, timestamp):
+        """Shortfall with zero generation discharges for all demand."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Shortfall = 3.0 - 0.0 = 3.0 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 3.0
+
+
+class TestSelfConsumptionStrategyBalanced:
+    """Test self-consumption strategy when generation equals demand."""
+
+    def test_balanced_no_action(self, self_consumption_strategy, timestamp):
+        """When generation equals demand, no battery action."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=2.0,
+            demand_kw=2.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+    def test_both_zero_no_action(self, self_consumption_strategy, timestamp):
+        """When both generation and demand are zero, no action."""
+        decision = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+
+class TestSelfConsumptionStrategySOCIndependence:
+    """Test that self-consumption strategy doesn't depend on SOC."""
+
+    def test_decision_independent_of_soc_high(
+        self, self_consumption_strategy, timestamp
+    ):
+        """Decision is same regardless of battery SOC (high SOC)."""
+        decision_high = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=4.0,  # High SOC
+            battery_capacity_kwh=5.0,
+        )
+        decision_low = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=1.0,  # Low SOC
+            battery_capacity_kwh=5.0,
+        )
+        assert decision_high.charge_kw == decision_low.charge_kw
+        assert decision_high.discharge_kw == decision_low.discharge_kw
+
+    def test_decision_independent_of_capacity(
+        self, self_consumption_strategy, timestamp
+    ):
+        """Decision is same regardless of battery capacity."""
+        decision_small = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,  # Small battery
+        )
+        decision_large = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=5.0,
+            battery_capacity_kwh=10.0,  # Large battery
+        )
+        assert decision_small.charge_kw == decision_large.charge_kw
+        assert decision_small.discharge_kw == decision_large.discharge_kw
+
+
+class TestSelfConsumptionStrategyTimestampIndependence:
+    """Test that self-consumption strategy doesn't depend on timestamp."""
+
+    def test_decision_independent_of_time(self, self_consumption_strategy):
+        """Decision is same regardless of timestamp."""
+        morning = datetime(2024, 1, 1, 8, 0, 0)
+        afternoon = datetime(2024, 1, 1, 14, 0, 0)
+        evening = datetime(2024, 1, 1, 20, 0, 0)
+
+        decision_morning = self_consumption_strategy.decide_action(
+            timestamp=morning,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        decision_afternoon = self_consumption_strategy.decide_action(
+            timestamp=afternoon,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        decision_evening = self_consumption_strategy.decide_action(
+            timestamp=evening,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+
+        assert decision_morning.charge_kw == decision_afternoon.charge_kw
+        assert decision_morning.charge_kw == decision_evening.charge_kw
+        assert decision_morning.discharge_kw == decision_afternoon.discharge_kw
+        assert decision_morning.discharge_kw == decision_evening.discharge_kw
+
+
+class TestSelfConsumptionStrategyValidation:
+    """Test SelfConsumptionStrategy input validation."""
+
+    def test_negative_generation_raises(self, self_consumption_strategy, timestamp):
+        """Negative generation raises error."""
+        with pytest.raises(ValueError, match="non-negative"):
+            self_consumption_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=-1.0,
+                demand_kw=1.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+            )
+
+    def test_negative_demand_raises(self, self_consumption_strategy, timestamp):
+        """Negative demand raises error."""
+        with pytest.raises(ValueError, match="non-negative"):
+            self_consumption_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=-1.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+            )
+
+    def test_negative_soc_raises(self, self_consumption_strategy, timestamp):
+        """Negative battery SOC raises error."""
+        with pytest.raises(ValueError, match="non-negative"):
+            self_consumption_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=1.0,
+                battery_soc_kwh=-1.0,
+                battery_capacity_kwh=5.0,
+            )
+
+    def test_zero_capacity_raises(self, self_consumption_strategy, timestamp):
+        """Zero battery capacity raises error."""
+        with pytest.raises(ValueError, match="positive"):
+            self_consumption_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=1.0,
+                battery_soc_kwh=0.0,
+                battery_capacity_kwh=0.0,
+            )
+
+    def test_negative_capacity_raises(self, self_consumption_strategy, timestamp):
+        """Negative battery capacity raises error."""
+        with pytest.raises(ValueError, match="positive"):
+            self_consumption_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=1.0,
+                battery_soc_kwh=1.0,
+                battery_capacity_kwh=-5.0,
+            )
+
+    def test_zero_timestep_raises(self, self_consumption_strategy, timestamp):
+        """Zero timestep raises error."""
+        with pytest.raises(ValueError, match="positive"):
+            self_consumption_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=1.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+                timestep_minutes=0.0,
+            )
+
+    def test_negative_timestep_raises(self, self_consumption_strategy, timestamp):
+        """Negative timestep raises error."""
+        with pytest.raises(ValueError, match="positive"):
+            self_consumption_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=1.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+                timestep_minutes=-60.0,
+            )
+
+
+class TestSelfConsumptionStrategyTimestepIndependence:
+    """Test that timestep duration doesn't affect power decision."""
+
+    def test_decision_independent_of_timestep_duration(
+        self, self_consumption_strategy, timestamp
+    ):
+        """Power decision is same regardless of timestep duration."""
+        decision_1min = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=1.0,
+        )
+        decision_60min = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+            timestep_minutes=60.0,
+        )
+        # Power (kW) should be same regardless of duration
+        assert decision_1min.charge_kw == decision_60min.charge_kw
+        assert decision_1min.discharge_kw == decision_60min.discharge_kw
+
+
+class TestStrategyInterfaceContract:
+    """Test that dispatch strategy adheres to interface contract."""
+
+    def test_strategy_has_decide_action_method(self, self_consumption_strategy):
+        """Strategy has decide_action method."""
+        assert hasattr(self_consumption_strategy, "decide_action")
+        assert callable(self_consumption_strategy.decide_action)
+
+    def test_decide_action_returns_dispatch_decision(
+        self, self_consumption_strategy, timestamp
+    ):
+        """decide_action returns DispatchDecision type."""
+        result = self_consumption_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=2.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert isinstance(result, DispatchDecision)
+
+    def test_decision_never_simultaneous_charge_discharge(
+        self, self_consumption_strategy, timestamp
+    ):
+        """Strategy never returns simultaneous charge and discharge."""
+        # Test various scenarios
+        test_cases = [
+            (3.0, 1.0),  # Excess
+            (1.0, 3.0),  # Shortfall
+            (2.0, 2.0),  # Balanced
+            (0.0, 0.0),  # Both zero
+            (5.0, 0.0),  # Max excess
+            (0.0, 5.0),  # Max shortfall
+        ]
+        for gen, dem in test_cases:
+            decision = self_consumption_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=gen,
+                demand_kw=dem,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+            )
+            # Either charge_kw or discharge_kw must be zero (or both)
+            assert decision.charge_kw == 0.0 or decision.discharge_kw == 0.0
+
+    def test_decision_powers_are_non_negative(
+        self, self_consumption_strategy, timestamp
+    ):
+        """Strategy always returns non-negative powers."""
+        # Test various scenarios
+        test_cases = [
+            (3.0, 1.0),
+            (1.0, 3.0),
+            (2.0, 2.0),
+            (0.1, 0.05),
+            (10.0, 0.0),
+            (0.0, 10.0),
+        ]
+        for gen, dem in test_cases:
+            decision = self_consumption_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=gen,
+                demand_kw=dem,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+            )
+            assert decision.charge_kw >= 0.0
+            assert decision.discharge_kw >= 0.0
+
+
+# =============================================================================
+# TOU OPTIMIZED STRATEGY TESTS
+# =============================================================================
+
+
+@pytest.fixture
+def standard_tou_strategy():
+    """Create a standard TOU strategy with typical peak hours."""
+    # Peak hours: 5 PM to 8 PM (17:00 to 20:00)
+    return TOUOptimizedStrategy(peak_hours=[(17, 20)])
+
+
+@pytest.fixture
+def multi_peak_tou_strategy():
+    """Create a TOU strategy with multiple peak periods."""
+    # Peak hours: 7 AM to 9 AM and 5 PM to 8 PM
+    return TOUOptimizedStrategy(peak_hours=[(7, 9), (17, 20)])
+
+
+@pytest.fixture
+def explicit_offpeak_tou_strategy():
+    """Create a TOU strategy with explicit off-peak hours."""
+    # Peak hours: 5 PM to 8 PM, Off-peak: 9 AM to 4 PM
+    return TOUOptimizedStrategy(peak_hours=[(17, 20)], off_peak_hours=[(9, 16)])
+
+
+class TestTOUOptimizedStrategyBasics:
+    """Test basic TOUOptimizedStrategy functionality."""
+
+    def test_can_instantiate(self, standard_tou_strategy):
+        """TOUOptimizedStrategy can be instantiated."""
+        assert isinstance(standard_tou_strategy, DispatchStrategy)
+        assert isinstance(standard_tou_strategy, TOUOptimizedStrategy)
+
+    def test_instantiate_with_peak_hours(self):
+        """Can instantiate with peak hours definition."""
+        strategy = TOUOptimizedStrategy(peak_hours=[(17, 20)])
+        assert isinstance(strategy, TOUOptimizedStrategy)
+
+    def test_instantiate_with_multiple_peak_periods(self):
+        """Can instantiate with multiple peak periods."""
+        strategy = TOUOptimizedStrategy(peak_hours=[(7, 9), (17, 20)])
+        assert isinstance(strategy, TOUOptimizedStrategy)
+
+    def test_instantiate_with_off_peak_hours(self):
+        """Can instantiate with explicit off-peak hours."""
+        strategy = TOUOptimizedStrategy(
+            peak_hours=[(17, 20)], off_peak_hours=[(9, 16)]
+        )
+        assert isinstance(strategy, TOUOptimizedStrategy)
+
+    def test_returns_dispatch_decision(self, standard_tou_strategy):
+        """decide_action returns a DispatchDecision."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=2.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert isinstance(decision, DispatchDecision)
+
+
+class TestTOUOptimizedStrategyValidation:
+    """Test TOUOptimizedStrategy input validation."""
+
+    def test_invalid_peak_hour_range_raises(self):
+        """Peak hours outside 0-23 range raises error."""
+        with pytest.raises(ValueError, match="must be in range 0-23"):
+            TOUOptimizedStrategy(peak_hours=[(25, 28)])
+
+    def test_negative_peak_hour_raises(self):
+        """Negative peak hours raise error."""
+        with pytest.raises(ValueError, match="must be in range 0-23"):
+            TOUOptimizedStrategy(peak_hours=[(-1, 5)])
+
+    def test_peak_start_after_end_raises(self):
+        """Peak period with start >= end raises error."""
+        with pytest.raises(ValueError, match="start must be before end"):
+            TOUOptimizedStrategy(peak_hours=[(20, 17)])
+
+    def test_peak_start_equals_end_raises(self):
+        """Peak period with start == end raises error."""
+        with pytest.raises(ValueError, match="start must be before end"):
+            TOUOptimizedStrategy(peak_hours=[(17, 17)])
+
+    def test_invalid_offpeak_hour_range_raises(self):
+        """Off-peak hours outside 0-23 range raises error."""
+        with pytest.raises(ValueError, match="must be in range 0-23"):
+            TOUOptimizedStrategy(peak_hours=[(17, 20)], off_peak_hours=[(25, 30)])
+
+    def test_offpeak_start_after_end_raises(self):
+        """Off-peak period with start >= end raises error."""
+        with pytest.raises(ValueError, match="start must be before end"):
+            TOUOptimizedStrategy(peak_hours=[(17, 20)], off_peak_hours=[(6, 2)])
+
+    def test_negative_generation_raises(self, standard_tou_strategy):
+        """Negative generation raises error."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        with pytest.raises(ValueError, match="non-negative"):
+            standard_tou_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=-1.0,
+                demand_kw=1.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+            )
+
+    def test_negative_demand_raises(self, standard_tou_strategy):
+        """Negative demand raises error."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        with pytest.raises(ValueError, match="non-negative"):
+            standard_tou_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=-1.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+            )
+
+    def test_negative_soc_raises(self, standard_tou_strategy):
+        """Negative battery SOC raises error."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        with pytest.raises(ValueError, match="non-negative"):
+            standard_tou_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=1.0,
+                battery_soc_kwh=-1.0,
+                battery_capacity_kwh=5.0,
+            )
+
+    def test_zero_capacity_raises(self, standard_tou_strategy):
+        """Zero battery capacity raises error."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        with pytest.raises(ValueError, match="positive"):
+            standard_tou_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=1.0,
+                battery_soc_kwh=0.0,
+                battery_capacity_kwh=0.0,
+            )
+
+    def test_zero_timestep_raises(self, standard_tou_strategy):
+        """Zero timestep raises error."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        with pytest.raises(ValueError, match="positive"):
+            standard_tou_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=1.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+                timestep_minutes=0.0,
+            )
+
+
+class TestTOUOptimizedStrategyOffPeak:
+    """Test TOU strategy during off-peak hours."""
+
+    def test_offpeak_excess_pv_charges(self, standard_tou_strategy):
+        """During off-peak with excess PV, battery charges."""
+        # 12:00 PM - off-peak time
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Excess = 3.0 - 1.0 = 2.0 kW
+        assert decision.charge_kw == 2.0
+        assert decision.discharge_kw == 0.0
+
+    def test_offpeak_shortfall_preserves_battery(self, standard_tou_strategy):
+        """During off-peak with shortfall, battery is preserved for peak periods."""
+        # 12:00 PM - off-peak time
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Off-peak: let cheap grid power handle shortfall, preserve battery for peak
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+    def test_offpeak_balanced_no_action(self, standard_tou_strategy):
+        """During off-peak with balanced gen/demand, no action."""
+        # 12:00 PM - off-peak time
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=2.0,
+            demand_kw=2.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+    def test_early_morning_is_offpeak(self, standard_tou_strategy):
+        """Early morning hours are off-peak."""
+        # 6:00 AM - should be off-peak
+        timestamp = datetime(2024, 1, 1, 6, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Should charge from excess (off-peak behavior)
+        assert decision.charge_kw == 2.0
+        assert decision.discharge_kw == 0.0
+
+
+class TestTOUOptimizedStrategyPeak:
+    """Test TOU strategy during peak hours."""
+
+    def test_peak_excess_pv_charges(self, standard_tou_strategy):
+        """During peak with excess PV, still charges (free energy)."""
+        # 6:00 PM - peak time (17:00-20:00)
+        timestamp = datetime(2024, 1, 1, 18, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Excess = 3.0 - 1.0 = 2.0 kW - charges even during peak
+        assert decision.charge_kw == 2.0
+        assert decision.discharge_kw == 0.0
+
+    def test_peak_shortfall_discharges(self, standard_tou_strategy):
+        """During peak with shortfall, battery discharges to offset costs."""
+        # 6:00 PM - peak time
+        timestamp = datetime(2024, 1, 1, 18, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Shortfall = 3.0 - 1.0 = 2.0 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 2.0
+
+    def test_peak_balanced_no_action(self, standard_tou_strategy):
+        """During peak with balanced gen/demand, no action."""
+        # 6:00 PM - peak time
+        timestamp = datetime(2024, 1, 1, 18, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=2.0,
+            demand_kw=2.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+    def test_peak_start_hour(self, standard_tou_strategy):
+        """Peak period start hour (17:00) is detected correctly."""
+        # 5:00 PM - start of peak
+        timestamp = datetime(2024, 1, 1, 17, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Should discharge (peak behavior)
+        assert decision.discharge_kw == 2.0
+
+    def test_peak_end_hour_is_offpeak(self, standard_tou_strategy):
+        """Peak period end hour (20:00) is actually off-peak."""
+        # 8:00 PM - just after peak ends (17:00-20:00 means up to 19:59)
+        timestamp = datetime(2024, 1, 1, 20, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Off-peak: preserve battery, no discharge
+        assert decision.discharge_kw == 0.0
+
+    def test_before_peak_is_offpeak(self, standard_tou_strategy):
+        """Hour before peak start is off-peak."""
+        # 4:00 PM - just before peak
+        timestamp = datetime(2024, 1, 1, 16, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Should charge from excess (off-peak behavior)
+        assert decision.charge_kw == 2.0
+
+
+class TestTOUOptimizedStrategyMultiplePeaks:
+    """Test TOU strategy with multiple peak periods."""
+
+    def test_morning_peak_detected(self, multi_peak_tou_strategy):
+        """Morning peak period (7-9 AM) is detected."""
+        # 8:00 AM - in morning peak
+        timestamp = datetime(2024, 1, 1, 8, 0, 0)
+        decision = multi_peak_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Should discharge (peak behavior)
+        assert decision.discharge_kw == 2.0
+
+    def test_evening_peak_detected(self, multi_peak_tou_strategy):
+        """Evening peak period (5-8 PM) is detected."""
+        # 6:00 PM - in evening peak
+        timestamp = datetime(2024, 1, 1, 18, 0, 0)
+        decision = multi_peak_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Should discharge (peak behavior)
+        assert decision.discharge_kw == 2.0
+
+    def test_between_peaks_is_offpeak(self, multi_peak_tou_strategy):
+        """Time between peak periods is off-peak."""
+        # 12:00 PM - between morning and evening peak
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = multi_peak_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Should charge from excess (off-peak behavior)
+        assert decision.charge_kw == 2.0
+
+    def test_after_all_peaks_is_offpeak(self, multi_peak_tou_strategy):
+        """Time after all peak periods is off-peak."""
+        # 11:00 PM - after both peaks
+        timestamp = datetime(2024, 1, 1, 23, 0, 0)
+        decision = multi_peak_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Should charge from excess (off-peak behavior)
+        assert decision.charge_kw == 2.0
+
+
+class TestTOUOptimizedStrategySOCIndependence:
+    """Test that TOU strategy doesn't depend on SOC for basic decisions."""
+
+    def test_decision_independent_of_soc(self, standard_tou_strategy):
+        """Decision is same regardless of battery SOC."""
+        timestamp = datetime(2024, 1, 1, 18, 0, 0)  # Peak time
+
+        decision_high = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=4.0,  # High SOC
+            battery_capacity_kwh=5.0,
+        )
+        decision_low = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.0,
+            battery_soc_kwh=0.5,  # Low SOC
+            battery_capacity_kwh=5.0,
+        )
+
+        assert decision_high.charge_kw == decision_low.charge_kw
+        assert decision_high.discharge_kw == decision_low.discharge_kw
+
+
+class TestTOUOptimizedStrategyEdgeCases:
+    """Test TOU strategy edge cases."""
+
+    def test_midnight_hour_zero(self, standard_tou_strategy):
+        """Midnight (hour 0) is handled correctly."""
+        timestamp = datetime(2024, 1, 1, 0, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=2.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Midnight is off-peak, preserve battery
+        assert decision.discharge_kw == 0.0
+
+    def test_hour_23_before_midnight(self, standard_tou_strategy):
+        """Hour 23 (11 PM) is handled correctly."""
+        timestamp = datetime(2024, 1, 1, 23, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=2.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # 11 PM is off-peak, preserve battery
+        assert decision.discharge_kw == 0.0
+
+    def test_zero_generation_zero_demand_offpeak(self, standard_tou_strategy):
+        """Zero generation and demand during off-peak."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+    def test_zero_generation_zero_demand_peak(self, standard_tou_strategy):
+        """Zero generation and demand during peak."""
+        timestamp = datetime(2024, 1, 1, 18, 0, 0)
+        decision = standard_tou_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+
+# =============================================================================
+# PEAK SHAVING STRATEGY TESTS
+# =============================================================================
+
+
+@pytest.fixture
+def standard_peak_shaving_strategy():
+    """Create a standard peak shaving strategy with 2 kW limit."""
+    return PeakShavingStrategy(import_limit_kw=2.0)
+
+
+@pytest.fixture
+def low_limit_peak_shaving_strategy():
+    """Create a peak shaving strategy with low 0.5 kW limit."""
+    return PeakShavingStrategy(import_limit_kw=0.5)
+
+
+@pytest.fixture
+def high_limit_peak_shaving_strategy():
+    """Create a peak shaving strategy with high 5 kW limit."""
+    return PeakShavingStrategy(import_limit_kw=5.0)
+
+
+class TestPeakShavingStrategyBasics:
+    """Test basic PeakShavingStrategy functionality."""
+
+    def test_can_instantiate(self, standard_peak_shaving_strategy):
+        """PeakShavingStrategy can be instantiated."""
+        assert isinstance(standard_peak_shaving_strategy, DispatchStrategy)
+        assert isinstance(standard_peak_shaving_strategy, PeakShavingStrategy)
+
+    def test_instantiate_with_import_limit(self):
+        """Can instantiate with import limit."""
+        strategy = PeakShavingStrategy(import_limit_kw=3.0)
+        assert isinstance(strategy, PeakShavingStrategy)
+
+    def test_returns_dispatch_decision(self, standard_peak_shaving_strategy):
+        """decide_action returns a DispatchDecision."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=2.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert isinstance(decision, DispatchDecision)
+
+
+class TestPeakShavingStrategyValidation:
+    """Test PeakShavingStrategy input validation."""
+
+    def test_zero_import_limit_raises(self):
+        """Zero import limit raises error."""
+        with pytest.raises(ValueError, match="positive"):
+            PeakShavingStrategy(import_limit_kw=0.0)
+
+    def test_negative_import_limit_raises(self):
+        """Negative import limit raises error."""
+        with pytest.raises(ValueError, match="positive"):
+            PeakShavingStrategy(import_limit_kw=-1.0)
+
+    def test_negative_generation_raises(self, standard_peak_shaving_strategy):
+        """Negative generation raises error."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        with pytest.raises(ValueError, match="non-negative"):
+            standard_peak_shaving_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=-1.0,
+                demand_kw=2.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+            )
+
+    def test_negative_demand_raises(self, standard_peak_shaving_strategy):
+        """Negative demand raises error."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        with pytest.raises(ValueError, match="non-negative"):
+            standard_peak_shaving_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=-1.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+            )
+
+    def test_negative_soc_raises(self, standard_peak_shaving_strategy):
+        """Negative battery SOC raises error."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        with pytest.raises(ValueError, match="non-negative"):
+            standard_peak_shaving_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=2.0,
+                battery_soc_kwh=-1.0,
+                battery_capacity_kwh=5.0,
+            )
+
+    def test_zero_capacity_raises(self, standard_peak_shaving_strategy):
+        """Zero battery capacity raises error."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        with pytest.raises(ValueError, match="positive"):
+            standard_peak_shaving_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=2.0,
+                battery_soc_kwh=0.0,
+                battery_capacity_kwh=0.0,
+            )
+
+    def test_zero_timestep_raises(self, standard_peak_shaving_strategy):
+        """Zero timestep raises error."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        with pytest.raises(ValueError, match="positive"):
+            standard_peak_shaving_strategy.decide_action(
+                timestamp=timestamp,
+                generation_kw=1.0,
+                demand_kw=2.0,
+                battery_soc_kwh=2.5,
+                battery_capacity_kwh=5.0,
+                timestep_minutes=0.0,
+            )
+
+
+class TestPeakShavingStrategyExcessPV:
+    """Test peak shaving with excess PV generation."""
+
+    def test_excess_pv_charges(self, standard_peak_shaving_strategy):
+        """When generation > demand, battery charges from excess."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=5.0,
+            demand_kw=2.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Excess = 5.0 - 2.0 = 3.0 kW
+        assert decision.charge_kw == 3.0
+        assert decision.discharge_kw == 0.0
+
+    def test_large_excess_charges(self, standard_peak_shaving_strategy):
+        """Large excess PV charges appropriately."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=10.0,
+            demand_kw=1.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Excess = 10.0 - 1.0 = 9.0 kW
+        assert decision.charge_kw == 9.0
+        assert decision.discharge_kw == 0.0
+
+    def test_small_excess_charges(self, standard_peak_shaving_strategy):
+        """Small excess PV charges appropriately."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=2.1,
+            demand_kw=2.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Excess = 2.1 - 2.0 = 0.1 kW
+        assert decision.charge_kw == pytest.approx(0.1)
+        assert decision.discharge_kw == 0.0
+
+
+class TestPeakShavingStrategyBelowThreshold:
+    """Test peak shaving when import is below threshold."""
+
+    def test_shortfall_below_threshold_no_discharge(
+        self, standard_peak_shaving_strategy
+    ):
+        """When shortfall < threshold, no battery discharge."""
+        # Limit is 2.0 kW
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=2.5,  # Shortfall = 1.5 kW < 2.0 kW limit
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Shortfall is 1.5 kW, which is below 2.0 kW threshold
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+    def test_shortfall_exactly_at_threshold_no_discharge(
+        self, standard_peak_shaving_strategy
+    ):
+        """When shortfall exactly equals threshold, no discharge."""
+        # Limit is 2.0 kW
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.0,  # Shortfall = 2.0 kW = threshold
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Shortfall equals threshold, no shaving needed
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+    def test_small_shortfall_below_threshold(self, standard_peak_shaving_strategy):
+        """Small shortfall below threshold requires no action."""
+        # Limit is 2.0 kW
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=2.0,
+            demand_kw=2.5,  # Shortfall = 0.5 kW < 2.0 kW limit
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+
+class TestPeakShavingStrategyAboveThreshold:
+    """Test peak shaving when import exceeds threshold."""
+
+    def test_shortfall_above_threshold_discharges(
+        self, standard_peak_shaving_strategy
+    ):
+        """When shortfall > threshold, battery discharges to shave peak."""
+        # Limit is 2.0 kW
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=5.0,  # Shortfall = 4.0 kW > 2.0 kW limit
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Discharge = shortfall - threshold = 4.0 - 2.0 = 2.0 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 2.0
+
+    def test_large_peak_discharge_amount(self, standard_peak_shaving_strategy):
+        """Large peak results in large discharge to shave."""
+        # Limit is 2.0 kW
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=10.0,  # Shortfall = 10.0 kW > 2.0 kW limit
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Discharge = 10.0 - 2.0 = 8.0 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 8.0
+
+    def test_small_peak_above_threshold(self, standard_peak_shaving_strategy):
+        """Small peak slightly above threshold."""
+        # Limit is 2.0 kW
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=3.5,  # Shortfall = 2.5 kW > 2.0 kW limit
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Discharge = 2.5 - 2.0 = 0.5 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == pytest.approx(0.5)
+
+
+class TestPeakShavingStrategyDifferentLimits:
+    """Test peak shaving with different import limits."""
+
+    def test_low_limit_triggers_more_discharge(self, low_limit_peak_shaving_strategy):
+        """Low import limit (0.5 kW) triggers discharge more often."""
+        # Limit is 0.5 kW
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = low_limit_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=2.0,  # Shortfall = 1.0 kW > 0.5 kW limit
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Discharge = 1.0 - 0.5 = 0.5 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == pytest.approx(0.5)
+
+    def test_high_limit_allows_more_import(self, high_limit_peak_shaving_strategy):
+        """High import limit (5 kW) allows more grid import."""
+        # Limit is 5.0 kW
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = high_limit_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=5.0,  # Shortfall = 4.0 kW < 5.0 kW limit
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Shortfall below threshold, no discharge
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+    def test_high_limit_shaves_large_peaks(self, high_limit_peak_shaving_strategy):
+        """High limit still shaves very large peaks."""
+        # Limit is 5.0 kW
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = high_limit_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=10.0,  # Shortfall = 10.0 kW > 5.0 kW limit
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Discharge = 10.0 - 5.0 = 5.0 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 5.0
+
+
+class TestPeakShavingStrategyBalanced:
+    """Test peak shaving when generation equals demand."""
+
+    def test_balanced_no_action(self, standard_peak_shaving_strategy):
+        """When generation equals demand, no battery action."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=3.0,
+            demand_kw=3.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+    def test_both_zero_no_action(self, standard_peak_shaving_strategy):
+        """When both generation and demand are zero, no action."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=0.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 0.0
+
+
+class TestPeakShavingStrategySOCIndependence:
+    """Test that peak shaving doesn't depend on SOC."""
+
+    def test_decision_independent_of_soc(self, standard_peak_shaving_strategy):
+        """Decision is same regardless of battery SOC."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+
+        decision_high = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=5.0,
+            battery_soc_kwh=4.0,  # High SOC
+            battery_capacity_kwh=5.0,
+        )
+        decision_low = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=1.0,
+            demand_kw=5.0,
+            battery_soc_kwh=0.5,  # Low SOC
+            battery_capacity_kwh=5.0,
+        )
+
+        assert decision_high.charge_kw == decision_low.charge_kw
+        assert decision_high.discharge_kw == decision_low.discharge_kw
+
+
+class TestPeakShavingStrategyTimestampIndependence:
+    """Test that peak shaving doesn't depend on timestamp."""
+
+    def test_decision_independent_of_time(self, standard_peak_shaving_strategy):
+        """Decision is same regardless of timestamp."""
+        morning = datetime(2024, 1, 1, 8, 0, 0)
+        afternoon = datetime(2024, 1, 1, 14, 0, 0)
+        evening = datetime(2024, 1, 1, 20, 0, 0)
+
+        decision_morning = standard_peak_shaving_strategy.decide_action(
+            timestamp=morning,
+            generation_kw=1.0,
+            demand_kw=5.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        decision_afternoon = standard_peak_shaving_strategy.decide_action(
+            timestamp=afternoon,
+            generation_kw=1.0,
+            demand_kw=5.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        decision_evening = standard_peak_shaving_strategy.decide_action(
+            timestamp=evening,
+            generation_kw=1.0,
+            demand_kw=5.0,
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+
+        assert decision_morning.charge_kw == decision_afternoon.charge_kw
+        assert decision_morning.charge_kw == decision_evening.charge_kw
+        assert decision_morning.discharge_kw == decision_afternoon.discharge_kw
+        assert decision_morning.discharge_kw == decision_evening.discharge_kw
+
+
+class TestPeakShavingStrategyEdgeCases:
+    """Test peak shaving edge cases."""
+
+    def test_zero_generation_large_demand(self, standard_peak_shaving_strategy):
+        """Zero generation with large demand."""
+        # Limit is 2.0 kW
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=5.0,  # All from grid, shortfall = 5.0 kW
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Discharge = 5.0 - 2.0 = 3.0 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == 3.0
+
+    def test_high_generation_zero_demand(self, standard_peak_shaving_strategy):
+        """High generation with zero demand."""
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = standard_peak_shaving_strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=5.0,
+            demand_kw=0.0,  # All excess
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Excess = 5.0 kW, should charge
+        assert decision.charge_kw == 5.0
+        assert decision.discharge_kw == 0.0
+
+    def test_very_low_import_limit(self):
+        """Strategy works with very low import limit."""
+        strategy = PeakShavingStrategy(import_limit_kw=0.1)
+        timestamp = datetime(2024, 1, 1, 12, 0, 0)
+        decision = strategy.decide_action(
+            timestamp=timestamp,
+            generation_kw=0.0,
+            demand_kw=1.0,  # Shortfall = 1.0 kW > 0.1 kW limit
+            battery_soc_kwh=2.5,
+            battery_capacity_kwh=5.0,
+        )
+        # Discharge = 1.0 - 0.1 = 0.9 kW
+        assert decision.charge_kw == 0.0
+        assert decision.discharge_kw == pytest.approx(0.9)

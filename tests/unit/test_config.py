@@ -11,6 +11,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.config import (
     BatteryDistributionConfig,
     ConfigurationError,
+    DispatchStrategyConfig,
     FleetDistributionConfig,
     LoadDistributionConfig,
     NormalDistribution,
@@ -21,6 +22,7 @@ from solar_challenge.config import (
     SimulationPeriod,
     UniformDistribution,
     WeightedDiscreteDistribution,
+    _parse_dispatch_strategy_config,
     _parse_distribution_spec,
     _parse_fleet_distribution_config,
     _sample_from_distribution,
@@ -220,6 +222,157 @@ class TestParameterSweepConfig:
                 min_value=0,
                 max_value=10,
             )
+
+
+class TestDispatchStrategyConfig:
+    """Tests for DispatchStrategyConfig class."""
+
+    def test_self_consumption_strategy(self) -> None:
+        """Test self-consumption strategy configuration."""
+        config = DispatchStrategyConfig(strategy_type="self_consumption")
+        assert config.strategy_type == "self_consumption"
+        assert config.peak_hours is None
+        assert config.import_limit_kw is None
+
+    def test_tou_optimized_strategy(self) -> None:
+        """Test TOU optimized strategy configuration."""
+        config = DispatchStrategyConfig(
+            strategy_type="tou_optimized",
+            peak_hours=[(16, 20), (7, 9)],
+        )
+        assert config.strategy_type == "tou_optimized"
+        assert config.peak_hours == [(16, 20), (7, 9)]
+
+    def test_peak_shaving_strategy(self) -> None:
+        """Test peak-shaving strategy configuration."""
+        config = DispatchStrategyConfig(
+            strategy_type="peak_shaving",
+            import_limit_kw=5.0,
+        )
+        assert config.strategy_type == "peak_shaving"
+        assert config.import_limit_kw == 5.0
+
+    def test_invalid_strategy_type_raises(self) -> None:
+        """Test invalid strategy type raises error."""
+        with pytest.raises(ConfigurationError, match="Invalid strategy_type"):
+            DispatchStrategyConfig(strategy_type="invalid_strategy")
+
+    def test_tou_without_peak_hours_raises(self) -> None:
+        """Test TOU strategy without peak_hours raises error."""
+        with pytest.raises(ConfigurationError, match="requires 'peak_hours'"):
+            DispatchStrategyConfig(strategy_type="tou_optimized")
+
+    def test_tou_with_invalid_hour_range_raises(self) -> None:
+        """Test TOU strategy with invalid hour range raises error."""
+        with pytest.raises(ConfigurationError, match="must be in range"):
+            DispatchStrategyConfig(
+                strategy_type="tou_optimized",
+                peak_hours=[(16, 25)],  # 25 is invalid
+            )
+
+    def test_tou_with_negative_hour_raises(self) -> None:
+        """Test TOU strategy with negative hour raises error."""
+        with pytest.raises(ConfigurationError, match="must be in range"):
+            DispatchStrategyConfig(
+                strategy_type="tou_optimized",
+                peak_hours=[(-1, 10)],
+            )
+
+    def test_tou_with_start_after_end_raises(self) -> None:
+        """Test TOU strategy with start_hour >= end_hour raises error."""
+        with pytest.raises(ConfigurationError, match="start_hour must be less than"):
+            DispatchStrategyConfig(
+                strategy_type="tou_optimized",
+                peak_hours=[(20, 16)],
+            )
+
+    def test_tou_with_equal_start_end_raises(self) -> None:
+        """Test TOU strategy with equal start and end hours raises error."""
+        with pytest.raises(ConfigurationError, match="start_hour must be less than"):
+            DispatchStrategyConfig(
+                strategy_type="tou_optimized",
+                peak_hours=[(16, 16)],
+            )
+
+    def test_peak_shaving_without_limit_raises(self) -> None:
+        """Test peak-shaving strategy without import_limit_kw raises error."""
+        with pytest.raises(ConfigurationError, match="requires 'import_limit_kw'"):
+            DispatchStrategyConfig(strategy_type="peak_shaving")
+
+    def test_peak_shaving_with_negative_limit_raises(self) -> None:
+        """Test peak-shaving strategy with negative limit raises error."""
+        with pytest.raises(ConfigurationError, match="must be positive"):
+            DispatchStrategyConfig(
+                strategy_type="peak_shaving",
+                import_limit_kw=-5.0,
+            )
+
+    def test_peak_shaving_with_zero_limit_raises(self) -> None:
+        """Test peak-shaving strategy with zero limit raises error."""
+        with pytest.raises(ConfigurationError, match="must be positive"):
+            DispatchStrategyConfig(
+                strategy_type="peak_shaving",
+                import_limit_kw=0.0,
+            )
+
+
+class TestDispatchStrategyParsing:
+    """Tests for _parse_dispatch_strategy_config function."""
+
+    def test_parse_none(self) -> None:
+        """Test parsing None returns None."""
+        result = _parse_dispatch_strategy_config(None)
+        assert result is None
+
+    def test_parse_self_consumption(self) -> None:
+        """Test parsing self-consumption strategy."""
+        data = {"strategy_type": "self_consumption"}
+        result = _parse_dispatch_strategy_config(data)
+        assert result is not None
+        assert result.strategy_type == "self_consumption"
+        assert result.peak_hours is None
+        assert result.import_limit_kw is None
+
+    def test_parse_tou_optimized(self) -> None:
+        """Test parsing TOU optimized strategy."""
+        data = {
+            "strategy_type": "tou_optimized",
+            "peak_hours": [[16, 20], [7, 9]],
+        }
+        result = _parse_dispatch_strategy_config(data)
+        assert result is not None
+        assert result.strategy_type == "tou_optimized"
+        assert result.peak_hours == [(16, 20), (7, 9)]
+
+    def test_parse_peak_shaving(self) -> None:
+        """Test parsing peak-shaving strategy."""
+        data = {
+            "strategy_type": "peak_shaving",
+            "import_limit_kw": 5.0,
+        }
+        result = _parse_dispatch_strategy_config(data)
+        assert result is not None
+        assert result.strategy_type == "peak_shaving"
+        assert result.import_limit_kw == 5.0
+
+    def test_parse_missing_strategy_type_raises(self) -> None:
+        """Test parsing without strategy_type raises error."""
+        with pytest.raises(ConfigurationError, match="requires 'strategy_type'"):
+            _parse_dispatch_strategy_config({})
+
+    def test_parse_empty_strategy_type_raises(self) -> None:
+        """Test parsing with empty strategy_type raises error."""
+        with pytest.raises(ConfigurationError, match="requires 'strategy_type'"):
+            _parse_dispatch_strategy_config({"strategy_type": ""})
+
+    def test_parse_tou_with_null_peak_hours(self) -> None:
+        """Test parsing TOU strategy with null peak_hours raises error."""
+        data = {
+            "strategy_type": "tou_optimized",
+            "peak_hours": None,
+        }
+        with pytest.raises(ConfigurationError, match="requires 'peak_hours'"):
+            _parse_dispatch_strategy_config(data)
 
 
 class TestLoadConfigYaml:

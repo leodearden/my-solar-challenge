@@ -6,6 +6,12 @@ from typing import Optional
 import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
+from solar_challenge.dispatch import (
+    DispatchStrategy,
+    PeakShavingStrategy,
+    SelfConsumptionStrategy,
+    TOUOptimizedStrategy,
+)
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
@@ -47,6 +53,7 @@ class SimulationResults:
         battery_soc: Battery state of charge in kWh
         grid_import: Power imported from grid in kW
         grid_export: Power exported to grid in kW
+        strategy_name: Name of the dispatch strategy used
     """
 
     generation: pd.Series
@@ -57,6 +64,7 @@ class SimulationResults:
     battery_soc: pd.Series
     grid_import: pd.Series
     grid_export: pd.Series
+    strategy_name: str = "self_consumption"
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert results to DataFrame.
@@ -96,6 +104,37 @@ class SummaryStatistics:
     grid_dependency_ratio: float  # grid_import / demand
     export_ratio: float  # grid_export / generation
     simulation_days: int
+    strategy_name: str = "self_consumption"
+
+
+def _create_dispatch_strategy(config: HomeConfig) -> DispatchStrategy:
+    """Create dispatch strategy from battery config.
+
+    Args:
+        config: Home configuration with optional battery and dispatch strategy
+
+    Returns:
+        DispatchStrategy instance (defaults to SelfConsumptionStrategy if not configured)
+    """
+    # If no battery or no strategy config, use self-consumption
+    if config.battery_config is None or config.battery_config.dispatch_strategy is None:
+        return SelfConsumptionStrategy()
+
+    strategy_config = config.battery_config.dispatch_strategy
+    strategy_type = strategy_config.strategy_type
+
+    if strategy_type == "self_consumption":
+        return SelfConsumptionStrategy()
+    elif strategy_type == "tou_optimized":
+        if strategy_config.peak_hours is None:
+            raise ValueError("TOU strategy requires peak_hours configuration")
+        return TOUOptimizedStrategy(peak_hours=strategy_config.peak_hours)
+    elif strategy_type == "peak_shaving":
+        if strategy_config.import_limit_kw is None:
+            raise ValueError("Peak shaving strategy requires import_limit_kw configuration")
+        return PeakShavingStrategy(import_limit_kw=strategy_config.import_limit_kw)
+    else:
+        raise ValueError(f"Unknown strategy type: {strategy_type}")
 
 
 def simulate_home(
@@ -148,15 +187,22 @@ def simulate_home(
     if config.battery_config is not None:
         battery = Battery(config.battery_config)
 
+    # Create dispatch strategy
+    strategy = _create_dispatch_strategy(config)
+
     # Run timestep simulation
     results_list: list[EnergyFlowResult] = []
 
-    for gen_kw, dem_kw in zip(aligned_generation, minute_demand, strict=True):
+    for timestamp, (gen_kw, dem_kw) in zip(
+        minute_demand.index, zip(aligned_generation, minute_demand, strict=True), strict=True
+    ):
         result = simulate_timestep(
             generation_kw=float(gen_kw),
             demand_kw=float(dem_kw),
             battery=battery,
             timestep_minutes=1.0,
+            timestamp=timestamp.to_pydatetime(),
+            strategy=strategy,
         )
 
         if validate_balance:
@@ -173,6 +219,7 @@ def simulate_home(
     conversion_factor = 60.0
 
     return SimulationResults(
+        strategy_name=strategy.name,
         generation=pd.Series(
             [r.generation * conversion_factor for r in results_list],
             index=index,
@@ -289,4 +336,5 @@ def calculate_summary(results: SimulationResults) -> SummaryStatistics:
         grid_dependency_ratio=grid_dependency_ratio,
         export_ratio=export_ratio,
         simulation_days=sim_days,
+        strategy_name=results.strategy_name,
     )

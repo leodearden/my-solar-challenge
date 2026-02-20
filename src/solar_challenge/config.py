@@ -270,6 +270,59 @@ class LoadDistributionConfig:
 
 
 @dataclass
+class DispatchStrategyConfig:
+    """Configuration for battery dispatch strategy.
+
+    Attributes:
+        strategy_type: Type of dispatch strategy (self_consumption, tou_optimized, peak_shaving)
+        peak_hours: List of (start_hour, end_hour) tuples for TOU strategy (optional)
+        import_limit_kw: Grid import limit in kW for peak-shaving strategy (optional)
+    """
+
+    strategy_type: str
+    peak_hours: Optional[list[tuple[int, int]]] = None
+    import_limit_kw: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Validate dispatch strategy configuration."""
+        valid_strategies = ("self_consumption", "tou_optimized", "peak_shaving")
+        if self.strategy_type not in valid_strategies:
+            raise ConfigurationError(
+                f"Invalid strategy_type '{self.strategy_type}'. "
+                f"Must be one of: {', '.join(valid_strategies)}"
+            )
+
+        # Validate TOU strategy parameters
+        if self.strategy_type == "tou_optimized":
+            if not self.peak_hours:
+                raise ConfigurationError(
+                    "tou_optimized strategy requires 'peak_hours' parameter"
+                )
+            for start_hour, end_hour in self.peak_hours:
+                if not (0 <= start_hour < 24 and 0 <= end_hour <= 24):
+                    raise ConfigurationError(
+                        f"Invalid peak hours ({start_hour}, {end_hour}). "
+                        "Hours must be in range [0, 24)"
+                    )
+                if start_hour >= end_hour:
+                    raise ConfigurationError(
+                        f"Invalid peak hours ({start_hour}, {end_hour}). "
+                        "start_hour must be less than end_hour"
+                    )
+
+        # Validate peak-shaving strategy parameters
+        if self.strategy_type == "peak_shaving":
+            if self.import_limit_kw is None:
+                raise ConfigurationError(
+                    "peak_shaving strategy requires 'import_limit_kw' parameter"
+                )
+            if self.import_limit_kw <= 0:
+                raise ConfigurationError(
+                    f"import_limit_kw must be positive, got {self.import_limit_kw}"
+                )
+
+
+@dataclass
 class FleetDistributionConfig:
     """Configuration for generating a fleet from distributions.
 
@@ -497,11 +550,18 @@ def _parse_battery_config(data: Optional[dict[str, Any]]) -> Optional[BatteryCon
     """Parse battery configuration from config data."""
     if data is None:
         return None
+
+    # Parse dispatch strategy if present
+    dispatch_strategy = None
+    if "dispatch_strategy" in data:
+        dispatch_strategy = _parse_dispatch_strategy_config(data["dispatch_strategy"])
+
     return BatteryConfig(
         capacity_kwh=data.get("capacity_kwh", 5.0),
         max_charge_kw=data.get("max_charge_kw", 2.5),
         max_discharge_kw=data.get("max_discharge_kw", 2.5),
         name=data.get("name", ""),
+        dispatch_strategy=dispatch_strategy,
     )
 
 
@@ -513,6 +573,31 @@ def _parse_load_config(data: dict[str, Any]) -> LoadConfig:
         name=data.get("name", ""),
         use_stochastic=data.get("use_stochastic", True),
         seed=data.get("seed"),
+    )
+
+
+def _parse_dispatch_strategy_config(
+    data: Optional[dict[str, Any]]
+) -> Optional[DispatchStrategyConfig]:
+    """Parse dispatch strategy configuration from config data."""
+    if data is None:
+        return None
+
+    strategy_type = data.get("strategy_type")
+    if not strategy_type:
+        raise ConfigurationError("Dispatch strategy config requires 'strategy_type'")
+
+    # Parse peak_hours if present (convert from list of lists to list of tuples)
+    peak_hours = None
+    if "peak_hours" in data:
+        peak_hours_raw = data["peak_hours"]
+        if peak_hours_raw is not None:
+            peak_hours = [tuple(hours) for hours in peak_hours_raw]
+
+    return DispatchStrategyConfig(
+        strategy_type=strategy_type,
+        peak_hours=peak_hours,
+        import_limit_kw=data.get("import_limit_kw"),
     )
 
 
