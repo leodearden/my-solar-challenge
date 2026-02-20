@@ -179,6 +179,21 @@ class TestCalculateSummary:
         assert summary.self_consumption_ratio == 0.0
         assert summary.export_ratio == 0.0
 
+    def test_SEG_revenue_with_tariff(self, sample_results):
+        """SEG revenue is computed when tariff is provided."""
+        # total_grid_export_kwh = 0.5 kW * 24 h = 12 kWh
+        # seg_revenue_gbp = 12 * 15 / 100 = 1.80 GBP
+        summary = calculate_summary(sample_results, seg_tariff_pence_per_kwh=15.0)
+
+        assert summary.seg_revenue_gbp is not None
+        assert summary.seg_revenue_gbp == pytest.approx(1.80, rel=0.01)
+
+    def test_SEG_revenue_without_tariff(self, sample_results):
+        """seg_revenue_gbp is None when no tariff is provided."""
+        summary = calculate_summary(sample_results)
+
+        assert summary.seg_revenue_gbp is None
+
 
 class TestSummaryStatistics:
     """Test SummaryStatistics dataclass."""

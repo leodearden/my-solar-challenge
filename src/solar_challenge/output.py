@@ -143,17 +143,20 @@ def export_to_csv(
 def generate_summary_report(
     results: SimulationResults,
     home_name: Optional[str] = None,
+    seg_tariff_pence_per_kwh: Optional[float] = None,
 ) -> str:
     """Generate a text summary report of simulation results.
 
     Args:
         results: Simulation results
         home_name: Optional name for the home
+        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
+            If provided, a SEG Revenue section is included in the report.
 
     Returns:
         Formatted markdown text report
     """
-    summary = calculate_summary(results)
+    summary = calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
 
     title = f"# Simulation Report: {home_name}" if home_name else "# Simulation Report"
 
@@ -199,6 +202,17 @@ def generate_summary_report(
 | Average Demand | {summary.total_demand_kwh / summary.simulation_days:.1f} |
 | Average Self-Consumption | {summary.total_self_consumption_kwh / summary.simulation_days:.1f} |
 """
+
+    if summary.seg_revenue_gbp is not None:
+        report += f"""
+## SEG Revenue
+| Metric | Value |
+|--------|-------|
+| Tariff Rate | {seg_tariff_pence_per_kwh:.1f} p/kWh |
+| Total Export | {summary.total_grid_export_kwh:.1f} kWh |
+| SEG Revenue | £{summary.seg_revenue_gbp:.2f} |
+"""
+
     return report
 
 
@@ -298,18 +312,23 @@ def aggregate_monthly(results: SimulationResults) -> pd.DataFrame:
     return pd.concat([monthly_energy, monthly_peaks], axis=1)
 
 
-def aggregate_annual(results: SimulationResults) -> dict[str, float]:
+def aggregate_annual(
+    results: SimulationResults,
+    seg_tariff_pence_per_kwh: Optional[float] = None,
+) -> dict[str, float]:
     """Aggregate results to annual totals.
 
     Args:
         results: Simulation results
+        seg_tariff_pence_per_kwh: Smart Export Guarantee tariff in pence per kWh.
+            If provided, seg_revenue_gbp is included in the returned dictionary.
 
     Returns:
-        Dictionary with annual energy totals in kWh
+        Dictionary with annual energy totals in kWh, and optionally SEG revenue in GBP
     """
-    summary = calculate_summary(results)
+    summary = calculate_summary(results, seg_tariff_pence_per_kwh=seg_tariff_pence_per_kwh)
 
-    return {
+    annual: dict[str, float] = {
         "generation_kwh": summary.total_generation_kwh,
         "demand_kwh": summary.total_demand_kwh,
         "self_consumption_kwh": summary.total_self_consumption_kwh,
@@ -324,3 +343,8 @@ def aggregate_annual(results: SimulationResults) -> dict[str, float]:
         "export_ratio": summary.export_ratio,
         "simulation_days": float(summary.simulation_days),
     }
+
+    if summary.seg_revenue_gbp is not None:
+        annual["seg_revenue_gbp"] = summary.seg_revenue_gbp
+
+    return annual

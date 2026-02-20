@@ -415,6 +415,7 @@ class ScenarioConfig:
         homes: List of home configurations (for fleet simulation)
         home: Single home configuration (for single-home simulation)
         output: Output preferences
+        seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional)
     """
 
     name: str
@@ -424,6 +425,7 @@ class ScenarioConfig:
     homes: list[HomeConfig] = field(default_factory=list)
     home: Optional[HomeConfig] = None
     output: Optional[OutputConfig] = None
+    seg_tariff_pence_per_kwh: Optional[float] = None
 
     def __post_init__(self) -> None:
         """Validate scenario configuration."""
@@ -1062,6 +1064,23 @@ def generate_homes_from_distribution(
     return homes
 
 
+def _parse_seg_config(data: Optional[dict[str, Any]]) -> Optional[float]:
+    """Parse SEG (Smart Export Guarantee) configuration from config data.
+
+    Args:
+        data: SEG config dict with 'rate_pence_per_kwh', or None
+
+    Returns:
+        SEG tariff rate in pence per kWh, or None if not configured
+    """
+    if data is None:
+        return None
+    rate = data.get("rate_pence_per_kwh")
+    if rate is None:
+        return None
+    return float(rate)
+
+
 def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
     """Parse a scenario from config data."""
     if "name" not in data:
@@ -1093,6 +1112,7 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
         homes=homes,
         home=home,
         output=_parse_output_config(data.get("output")),
+        seg_tariff_pence_per_kwh=_parse_seg_config(data.get("seg")),
     )
 
 
