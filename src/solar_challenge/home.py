@@ -50,6 +50,9 @@ class SimulationResults:
         battery_soc: Battery state of charge in kWh
         grid_import: Power imported from grid in kW
         grid_export: Power exported to grid in kW
+        import_cost: Cost of grid import in £
+        export_revenue: Revenue from grid export in £
+        tariff_rate: Tariff rate in £/kWh
     """
 
     generation: pd.Series
@@ -60,6 +63,9 @@ class SimulationResults:
     battery_soc: pd.Series
     grid_import: pd.Series
     grid_export: pd.Series
+    import_cost: pd.Series
+    export_revenue: pd.Series
+    tariff_rate: pd.Series
 
     def to_dataframe(self) -> pd.DataFrame:
         """Convert results to DataFrame.
@@ -76,6 +82,9 @@ class SimulationResults:
             "battery_soc_kwh": self.battery_soc,
             "grid_import_kw": self.grid_import,
             "grid_export_kw": self.grid_export,
+            "import_cost_gbp": self.import_cost,
+            "export_revenue_gbp": self.export_revenue,
+            "tariff_rate_per_kwh": self.tariff_rate,
         })
 
 
@@ -215,6 +224,21 @@ def simulate_home(
             [r.grid_export * conversion_factor for r in results_list],
             index=index,
             name="grid_export_kw",
+        ),
+        import_cost=pd.Series(
+            [0.0 for _ in results_list],
+            index=index,
+            name="import_cost_gbp",
+        ),
+        export_revenue=pd.Series(
+            [0.0 for _ in results_list],
+            index=index,
+            name="export_revenue_gbp",
+        ),
+        tariff_rate=pd.Series(
+            [0.0 for _ in results_list],
+            index=index,
+            name="tariff_rate_per_kwh",
         ),
     )
 
