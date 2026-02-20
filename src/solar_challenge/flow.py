@@ -6,6 +6,7 @@ from typing import Optional
 import pandas as pd
 
 from solar_challenge.battery import Battery
+from solar_challenge.tariff import TariffConfig
 
 
 def calculate_self_consumption(
@@ -177,6 +178,113 @@ def simulate_timestep(
         if shortfall_kwh > 0:
             shortfall_power_kw = shortfall_kwh / duration_hours
             battery_discharge_kwh = battery.discharge(shortfall_power_kw, timestep_minutes)
+
+        battery_soc = battery.soc_kwh
+
+    # Self-consumption: direct PV consumption + battery discharge (capped at demand)
+    # Battery discharge represents PV energy stored earlier and consumed later
+    direct_consumption_kwh = min(generation_kwh, demand_kwh)
+    self_consumption_kwh = min(direct_consumption_kwh + battery_discharge_kwh, demand_kwh)
+
+    # Calculate grid flows
+    # Export = excess - battery_charged
+    grid_export_kwh = max(0.0, excess_kwh - battery_charge_kwh)
+
+    # Import = shortfall - battery_discharged
+    grid_import_kwh = max(0.0, shortfall_kwh - battery_discharge_kwh)
+
+    return EnergyFlowResult(
+        generation=generation_kwh,
+        demand=demand_kwh,
+        self_consumption=self_consumption_kwh,
+        battery_charge=battery_charge_kwh,
+        battery_discharge=battery_discharge_kwh,
+        grid_export=grid_export_kwh,
+        grid_import=grid_import_kwh,
+        battery_soc=battery_soc,
+    )
+
+
+def simulate_timestep_tou(
+    generation_kw: float,
+    demand_kw: float,
+    battery: Optional[Battery],
+    timestamp: pd.Timestamp,
+    tariff: TariffConfig,
+    timestep_minutes: float = 1.0,
+) -> EnergyFlowResult:
+    """Simulate energy flow for a single timestep with TOU-optimized battery dispatch.
+
+    TOU-optimized energy flow strategy:
+    1. PV generation meets demand directly (self-consumption)
+    2. Determine if current period is cheap or expensive
+    3. During cheap periods (off-peak):
+       - Excess PV charges battery aggressively
+       - Remaining excess exports to grid
+       - Battery may charge from grid if rate is very low (future enhancement)
+    4. During expensive periods (peak):
+       - Discharge battery to meet demand before importing from grid
+       - Excess PV charges battery (saving for later peak use)
+       - Export only if battery is full
+
+    Args:
+        generation_kw: PV generation power in kW
+        demand_kw: Demand power in kW
+        battery: Battery object (or None for no battery)
+        timestamp: Current timestamp for tariff rate lookup
+        tariff: Tariff configuration with rate periods
+        timestep_minutes: Duration of timestep in minutes
+
+    Returns:
+        EnergyFlowResult with all energy flows in kWh
+    """
+    duration_hours = timestep_minutes / 60
+
+    # Convert power to energy for this timestep
+    generation_kwh = generation_kw * duration_hours
+    demand_kwh = demand_kw * duration_hours
+
+    # Get current tariff rate
+    current_rate = tariff.get_rate(timestamp)
+
+    # Determine average rate across all periods (for peak/off-peak classification)
+    # Simple heuristic: if multiple rates exist, classify as cheap/expensive
+    all_rates = [period.rate_per_kwh for period in tariff.periods]
+    avg_rate = sum(all_rates) / len(all_rates)
+    is_cheap_period = current_rate <= avg_rate
+
+    # Calculate excess and shortfall
+    excess_kwh = max(0.0, generation_kwh - demand_kwh)
+    shortfall_kwh = max(0.0, demand_kwh - generation_kwh)
+
+    # Initialize battery-related values
+    battery_charge_kwh = 0.0
+    battery_discharge_kwh = 0.0
+    battery_soc = 0.0
+
+    if battery is not None:
+        if is_cheap_period:
+            # Off-peak strategy: charge battery from excess PV
+            if excess_kwh > 0:
+                excess_power_kw = excess_kwh / duration_hours
+                battery_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
+
+            # Meet shortfall from battery first, then grid
+            if shortfall_kwh > 0:
+                shortfall_power_kw = shortfall_kwh / duration_hours
+                battery_discharge_kwh = battery.discharge(shortfall_power_kw, timestep_minutes)
+        else:
+            # Peak period strategy: prioritize battery discharge during shortfall
+            # Also charge battery from excess to save for next peak
+            if shortfall_kwh > 0:
+                # Discharge battery aggressively to avoid expensive grid import
+                shortfall_power_kw = shortfall_kwh / duration_hours
+                battery_discharge_kwh = battery.discharge(shortfall_power_kw, timestep_minutes)
+
+            if excess_kwh > 0:
+                # Charge battery from excess (save for next peak period)
+                excess_power_kw = excess_kwh / duration_hours
+                battery_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
 
         battery_soc = battery.soc_kwh
 
