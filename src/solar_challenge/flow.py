@@ -265,14 +265,14 @@ def simulate_timestep_tou(
     if battery is not None:
         if is_cheap_period:
             # Off-peak strategy: charge battery from excess PV
+            # Save battery for expensive periods - import from cheap grid instead of discharging
             if excess_kwh > 0:
                 excess_power_kw = excess_kwh / duration_hours
                 battery_charge_kwh = battery.charge(excess_power_kw, timestep_minutes)
 
-            # Meet shortfall from battery first, then grid
-            if shortfall_kwh > 0:
-                shortfall_power_kw = shortfall_kwh / duration_hours
-                battery_discharge_kwh = battery.discharge(shortfall_power_kw, timestep_minutes)
+            # During cheap periods, do NOT discharge battery
+            # Let grid meet shortfall at low cost, save battery for peak periods
+            # battery_discharge_kwh remains 0.0
         else:
             # Peak period strategy: prioritize battery discharge during shortfall
             # Also charge battery from excess to save for next peak

@@ -1118,6 +1118,7 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
         homes=homes,
         home=home,
         output=_parse_output_config(data.get("output")),
+        tariff_config=_parse_tariff_config(data.get("tariff_config")),
     )
 
 

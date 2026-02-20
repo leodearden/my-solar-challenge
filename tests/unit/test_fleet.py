@@ -119,6 +119,9 @@ class TestFleetResults:
             battery_soc=pd.Series([2.5] * 1440, index=index),
             grid_import=pd.Series([0.0] * 1440, index=index),
             grid_export=pd.Series([0.5] * 1440, index=index),
+            import_cost=pd.Series([0.0] * 1440, index=index),
+            export_revenue=pd.Series([0.0] * 1440, index=index),
+            tariff_rate=pd.Series([0.0] * 1440, index=index),
         )
 
         home2_results = SimulationResults(
@@ -130,6 +133,9 @@ class TestFleetResults:
             battery_soc=pd.Series([2.5] * 1440, index=index),
             grid_import=pd.Series([0.0] * 1440, index=index),
             grid_export=pd.Series([0.5] * 1440, index=index),
+            import_cost=pd.Series([0.0] * 1440, index=index),
+            export_revenue=pd.Series([0.0] * 1440, index=index),
+            tariff_rate=pd.Series([0.0] * 1440, index=index),
         )
 
         configs = [
@@ -195,6 +201,9 @@ class TestFleetSummary:
                     battery_soc=pd.Series([0.0] * 1440, index=index),
                     grid_import=pd.Series([0.0] * 1440, index=index),
                     grid_export=pd.Series([gen_kw - 2.0] * 1440, index=index),
+                    import_cost=pd.Series([0.0] * 1440, index=index),
+                    export_revenue=pd.Series([0.0] * 1440, index=index),
+                    tariff_rate=pd.Series([0.0] * 1440, index=index),
                 )
             )
             configs.append(
@@ -570,6 +579,9 @@ class TestMultiSweepResults:
             battery_soc=pd.Series([0.0] * 10, index=index),
             grid_import=pd.Series([0.0] * 10, index=index),
             grid_export=pd.Series([0.0] * 10, index=index),
+            import_cost=pd.Series([0.0] * 10, index=index),
+            export_revenue=pd.Series([0.0] * 10, index=index),
+            tariff_rate=pd.Series([0.0] * 10, index=index),
         )
         fleet_results = FleetResults(
             per_home_results=[home_result],

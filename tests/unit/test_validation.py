@@ -90,6 +90,11 @@ def _create_simulation_results(
     grid_export = excess - battery_charge
     grid_import = shortfall - battery_discharge
 
+    # Create zero-filled series for financial fields
+    import_cost = pd.Series(np.zeros(len(index)), index=index)
+    export_revenue = pd.Series(np.zeros(len(index)), index=index)
+    tariff_rate = pd.Series(np.zeros(len(index)), index=index)
+
     return SimulationResults(
         generation=generation,
         demand=demand,
@@ -99,6 +104,9 @@ def _create_simulation_results(
         battery_soc=battery_soc,
         grid_import=grid_import,
         grid_export=grid_export,
+        import_cost=import_cost,
+        export_revenue=export_revenue,
+        tariff_rate=tariff_rate,
     )
 
 
