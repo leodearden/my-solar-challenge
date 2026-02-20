@@ -92,7 +92,7 @@ class SimulationResults:
 class SummaryStatistics:
     """Summary statistics for a simulation period.
 
-    All energy values in kWh.
+    All energy values in kWh, all financial values in £.
     """
 
     total_generation_kwh: float
@@ -108,6 +108,9 @@ class SummaryStatistics:
     grid_dependency_ratio: float  # grid_import / demand
     export_ratio: float  # grid_export / generation
     simulation_days: int
+    total_import_cost_gbp: float  # total cost of grid imports in £
+    total_export_revenue_gbp: float  # total revenue from grid exports in £
+    net_cost_gbp: float  # net cost (import - export) in £
 
 
 def simulate_home(
@@ -305,6 +308,11 @@ def calculate_summary(results: SimulationResults) -> SummaryStatistics:
     peak_gen = float(results.generation.max())
     peak_demand = float(results.demand.max())
 
+    # Calculate financial totals
+    total_import_cost = float(results.import_cost.sum())
+    total_export_revenue = float(results.export_revenue.sum())
+    net_cost = total_import_cost - total_export_revenue
+
     # Calculate ratios with zero-division protection
     self_consumption_ratio = total_self / total_gen if total_gen > 0 else 0.0
     grid_dependency_ratio = total_import / total_demand if total_demand > 0 else 0.0
@@ -327,4 +335,7 @@ def calculate_summary(results: SimulationResults) -> SummaryStatistics:
         grid_dependency_ratio=grid_dependency_ratio,
         export_ratio=export_ratio,
         simulation_days=sim_days,
+        total_import_cost_gbp=total_import_cost,
+        total_export_revenue_gbp=total_export_revenue,
+        net_cost_gbp=net_cost,
     )
