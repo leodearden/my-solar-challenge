@@ -285,6 +285,37 @@ class TariffConfig:
         )
 
 
+def calculate_bill(
+    energy_kwh: pd.Series,
+    tariff: TariffConfig,
+) -> float:
+    """Calculate electricity bill using time-varying tariff rates.
+
+    Applies the appropriate tariff rate to each timestep based on its
+    timestamp, then sums to get the total bill cost.
+
+    Args:
+        energy_kwh: Time series of energy consumption in kWh (must have DatetimeIndex)
+        tariff: Tariff configuration with rate periods
+
+    Returns:
+        Total bill cost in £
+
+    Raises:
+        ValueError: If energy_kwh doesn't have a DatetimeIndex
+    """
+    if not isinstance(energy_kwh.index, pd.DatetimeIndex):
+        raise ValueError("energy_kwh must have a DatetimeIndex")
+
+    total_cost = 0.0
+
+    for timestamp, energy in energy_kwh.items():
+        rate = tariff.get_rate(timestamp)
+        total_cost += energy * rate
+
+    return total_cost
+
+
 def FlatRateTariff(rate_per_kwh: float, name: str = "") -> TariffConfig:
     """Convenience function to create a flat-rate tariff.
 
