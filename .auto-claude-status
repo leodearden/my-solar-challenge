@@ -1,11 +1,11 @@
 {
   "active": true,
   "spec": "002-advanced-battery-dispatch-strategies",
-  "state": "building",
+  "state": "complete",
   "subtasks": {
-    "completed": 14,
+    "completed": 15,
     "total": 15,
-    "in_progress": 1,
+    "in_progress": 0,
     "failed": 0
   },
   "phase": {
@@ -21,5 +21,5 @@
     "number": 5,
     "started_at": "2026-02-20T20:30:34.420353"
   },
-  "last_update": "2026-02-20T20:42:03.472745"
+  "last_update": "2026-02-20T20:46:42.674610"
 }

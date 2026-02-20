@@ -326,9 +326,9 @@ class TOUOptimizedStrategy(DispatchStrategy):
             if excess_kw > 0:
                 return DispatchDecision(charge_kw=excess_kw, discharge_kw=0.0)
             elif shortfall_kw > 0:
-                # During off-peak, we could potentially charge from grid here
-                # but for simplicity, just discharge to meet demand
-                return DispatchDecision(charge_kw=0.0, discharge_kw=shortfall_kw)
+                # Off-peak: preserve battery for expensive peak periods
+                # Let cheap off-peak grid power handle the shortfall
+                return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
             else:
                 return DispatchDecision(charge_kw=0.0, discharge_kw=0.0)
         else:

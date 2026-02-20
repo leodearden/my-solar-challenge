@@ -678,8 +678,8 @@ class TestTOUOptimizedStrategyOffPeak:
         assert decision.charge_kw == 2.0
         assert decision.discharge_kw == 0.0
 
-    def test_offpeak_shortfall_discharges(self, standard_tou_strategy):
-        """During off-peak with shortfall, battery discharges."""
+    def test_offpeak_shortfall_preserves_battery(self, standard_tou_strategy):
+        """During off-peak with shortfall, battery is preserved for peak periods."""
         # 12:00 PM - off-peak time
         timestamp = datetime(2024, 1, 1, 12, 0, 0)
         decision = standard_tou_strategy.decide_action(
@@ -689,9 +689,9 @@ class TestTOUOptimizedStrategyOffPeak:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
         )
-        # Shortfall = 3.0 - 1.0 = 2.0 kW
+        # Off-peak: let cheap grid power handle shortfall, preserve battery for peak
         assert decision.charge_kw == 0.0
-        assert decision.discharge_kw == 2.0
+        assert decision.discharge_kw == 0.0
 
     def test_offpeak_balanced_no_action(self, standard_tou_strategy):
         """During off-peak with balanced gen/demand, no action."""
@@ -795,8 +795,8 @@ class TestTOUOptimizedStrategyPeak:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
         )
-        # Should discharge (off-peak behavior for shortfall)
-        assert decision.discharge_kw == 2.0
+        # Off-peak: preserve battery, no discharge
+        assert decision.discharge_kw == 0.0
 
     def test_before_peak_is_offpeak(self, standard_tou_strategy):
         """Hour before peak start is off-peak."""
@@ -912,8 +912,8 @@ class TestTOUOptimizedStrategyEdgeCases:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
         )
-        # Midnight is off-peak, should discharge for shortfall
-        assert decision.discharge_kw == 2.0
+        # Midnight is off-peak, preserve battery
+        assert decision.discharge_kw == 0.0
 
     def test_hour_23_before_midnight(self, standard_tou_strategy):
         """Hour 23 (11 PM) is handled correctly."""
@@ -925,8 +925,8 @@ class TestTOUOptimizedStrategyEdgeCases:
             battery_soc_kwh=2.5,
             battery_capacity_kwh=5.0,
         )
-        # 11 PM is off-peak, should discharge for shortfall
-        assert decision.discharge_kw == 2.0
+        # 11 PM is off-peak, preserve battery
+        assert decision.discharge_kw == 0.0
 
     def test_zero_generation_zero_demand_offpeak(self, standard_tou_strategy):
         """Zero generation and demand during off-peak."""
