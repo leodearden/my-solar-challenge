@@ -626,6 +626,7 @@ def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
     battery_data = data.get("battery")
     load_data = data.get("load", {})
     tariff_data = data.get("tariff")
+    dispatch_strategy = data.get("dispatch_strategy", "greedy")
 
     return HomeConfig(
         pv_config=_parse_pv_config(pv_data),
@@ -634,6 +635,7 @@ def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
         location=location,
         name=data.get("name", ""),
         tariff_config=_parse_tariff_config(tariff_data),
+        dispatch_strategy=dispatch_strategy,
     )
 
 
@@ -1078,6 +1080,7 @@ def generate_homes_from_distribution(
                 location=location,
                 name=f"Home {i + 1}",
                 tariff_config=None,
+                dispatch_strategy="greedy",
             )
         )
 
@@ -1499,6 +1502,7 @@ def _apply_parameter_to_home(
             location=location,
             name=home.name,
             tariff_config=home.tariff_config,
+            dispatch_strategy=home.dispatch_strategy,
         )
     elif param_name in battery_params:
         battery_config = _modify_battery_config(home.battery_config, param_name, value)
@@ -1509,6 +1513,7 @@ def _apply_parameter_to_home(
             location=location,
             name=home.name,
             tariff_config=home.tariff_config,
+            dispatch_strategy=home.dispatch_strategy,
         )
     elif param_name in load_params:
         load_config = _modify_load_config(home.load_config, param_name, value)
@@ -1519,6 +1524,7 @@ def _apply_parameter_to_home(
             location=location,
             name=home.name,
             tariff_config=home.tariff_config,
+            dispatch_strategy=home.dispatch_strategy,
         )
     else:
         raise ConfigurationError(f"Unknown parameter for sweep: {param_name}")

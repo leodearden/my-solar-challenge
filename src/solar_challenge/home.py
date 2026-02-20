@@ -6,7 +6,7 @@ from typing import Optional
 import pandas as pd
 
 from solar_challenge.battery import Battery, BatteryConfig
-from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
@@ -25,6 +25,7 @@ class HomeConfig:
         location: Geographic location for weather data
         name: Optional identifier for the home
         tariff_config: Tariff configuration (None for no cost tracking)
+        dispatch_strategy: Battery dispatch strategy ("greedy" or "tou_optimized")
     """
 
     pv_config: PVConfig
@@ -33,6 +34,7 @@ class HomeConfig:
     location: Location = Location.bristol()
     name: str = ""
     tariff_config: Optional[TariffConfig] = None
+    dispatch_strategy: str = "greedy"
 
 
 @dataclass
@@ -166,13 +168,29 @@ def simulate_home(
     # Run timestep simulation
     results_list: list[EnergyFlowResult] = []
 
-    for gen_kw, dem_kw in zip(aligned_generation, minute_demand, strict=True):
-        result = simulate_timestep(
-            generation_kw=float(gen_kw),
-            demand_kw=float(dem_kw),
-            battery=battery,
-            timestep_minutes=1.0,
-        )
+    # Choose dispatch strategy
+    use_tou_dispatch = (
+        config.dispatch_strategy == "tou_optimized"
+        and config.tariff_config is not None
+    )
+
+    for i, (gen_kw, dem_kw) in enumerate(zip(aligned_generation, minute_demand, strict=True)):
+        if use_tou_dispatch:
+            result = simulate_timestep_tou(
+                generation_kw=float(gen_kw),
+                demand_kw=float(dem_kw),
+                battery=battery,
+                timestamp=index[i],
+                tariff=config.tariff_config,  # type: ignore[arg-type]
+                timestep_minutes=1.0,
+            )
+        else:
+            result = simulate_timestep(
+                generation_kw=float(gen_kw),
+                demand_kw=float(dem_kw),
+                battery=battery,
+                timestep_minutes=1.0,
+            )
 
         if validate_balance:
             validate_energy_balance(result)
