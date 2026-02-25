@@ -8,7 +8,7 @@ import json
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator, Optional, Union
+from typing import Any, Iterator, Literal, Optional, Union, cast
 
 import pandas as pd
 
@@ -278,12 +278,12 @@ class HeatPumpDistributionConfig:
     Values can include None to represent homes without heat pumps.
 
     Attributes:
-        heat_pump_type: Heat pump type ('ASHP' or 'GSHP', or None for no heat pump)
+        heat_pump_type: Heat pump type ('ASHP' or 'GSHP'), distribution spec, or None for no heat pump
         thermal_capacity_kw: Distribution for thermal capacity (default: 8.0)
         annual_heat_demand_kwh: Distribution for annual heating demand (default: 8000.0)
     """
 
-    heat_pump_type: Optional[str] = None
+    heat_pump_type: Union[str, DistributionSpec, None] = None
     thermal_capacity_kw: DistributionSpec = 8.0
     annual_heat_demand_kwh: DistributionSpec = 8000.0
 
@@ -964,6 +964,7 @@ def _parse_heat_pump_distribution_config(
 
     # Parse heat_pump_type - can be string, distribution, or None
     heat_pump_type_raw = data.get("heat_pump_type")
+    heat_pump_type: Union[str, DistributionSpec, None]
     if heat_pump_type_raw is None:
         heat_pump_type = None
     elif isinstance(heat_pump_type_raw, str):
@@ -1157,7 +1158,8 @@ def generate_homes_from_distribution(
         sampler.prepare(config.pv.capacity_kw)
         if config.battery is not None:
             sampler.prepare(config.battery.capacity_kwh)
-        if config.heat_pump is not None:
+        if config.heat_pump is not None and not isinstance(config.heat_pump.heat_pump_type, str):
+            # Only prepare if heat_pump_type is a distribution (not a direct string value)
             sampler.prepare(config.heat_pump.heat_pump_type)
         # Other specs don't need special handling (fixed values)
     else:
@@ -1226,15 +1228,27 @@ def generate_homes_from_distribution(
         heat_pump_config: Optional[HeatPumpConfig] = None
         if config.heat_pump is not None:
             # Handle heat_pump_type: can be string, distribution, or None
+            heat_pump_type: Optional[str]
             if isinstance(config.heat_pump.heat_pump_type, str):
                 heat_pump_type = config.heat_pump.heat_pump_type
             elif isinstance(config.heat_pump.heat_pump_type, WeightedDiscreteDistribution):
                 # Sample from distribution (values can include None)
-                heat_pump_type = sampler.sample(config.heat_pump.heat_pump_type)
+                # Note: WeightedDiscreteDistribution is typed for floats but used with strings here
+                heat_pump_type = sampler.sample(config.heat_pump.heat_pump_type)  # type: ignore[assignment]
             else:
                 heat_pump_type = None
 
             if heat_pump_type is not None:
+                # Runtime validation - ensure heat_pump_type is valid
+                if heat_pump_type not in ('ASHP', 'GSHP'):
+                    raise ConfigurationError(
+                        f"Invalid heat pump type sampled: '{heat_pump_type}'. "
+                        f"Must be 'ASHP' or 'GSHP'"
+                    )
+
+                # Type narrowing - mypy now knows it's Literal['ASHP', 'GSHP']
+                heat_pump_type_literal = cast(Literal['ASHP', 'GSHP'], heat_pump_type)
+
                 thermal_capacity = sampler.sample_with_context(
                     config.heat_pump.thermal_capacity_kw, context
                 )
@@ -1242,7 +1256,7 @@ def generate_homes_from_distribution(
                     config.heat_pump.annual_heat_demand_kwh, context
                 )
                 heat_pump_config = HeatPumpConfig(
-                    heat_pump_type=heat_pump_type,
+                    heat_pump_type=heat_pump_type_literal,
                     thermal_capacity_kw=thermal_capacity if thermal_capacity is not None else 8.0,
                     annual_heat_demand_kwh=annual_heat_demand if annual_heat_demand is not None else 8000.0,
                 )
