@@ -13,6 +13,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategy,
 )
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
+from solar_challenge.heat_pump import HeatPumpConfig
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
@@ -28,6 +29,7 @@ class HomeConfig:
         pv_config: PV system configuration
         load_config: Load profile configuration
         battery_config: Battery configuration (None for PV-only)
+        heat_pump_config: Heat pump configuration (None for no heat pump)
         location: Geographic location for weather data
         name: Optional identifier for the home
         tariff_config: Tariff configuration (None for no cost tracking)
@@ -37,6 +39,7 @@ class HomeConfig:
     pv_config: PVConfig
     load_config: LoadConfig
     battery_config: Optional[BatteryConfig] = None
+    heat_pump_config: Optional[HeatPumpConfig] = None
     location: Location = Location.bristol()
     name: str = ""
     tariff_config: Optional[TariffConfig] = None
