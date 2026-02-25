@@ -271,6 +271,19 @@ class LoadDistributionConfig:
 
 
 @dataclass
+class EVDistributionConfig:
+    """Distribution configuration for EV charging parameters.
+
+    Values can include None to represent homes without EVs.
+
+    Attributes:
+        charger_type: Distribution for EV charger type (can include None)
+    """
+
+    charger_type: DistributionSpec
+
+
+@dataclass
 class DispatchStrategyConfig:
     """Configuration for battery dispatch strategy.
 
