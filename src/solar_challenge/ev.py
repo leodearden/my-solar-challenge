@@ -208,12 +208,42 @@ def generate_ev_charging_profile(
         # Calculate available charging window
         available_minutes = departure_minute - arrival_minute
 
-        # Charge for the minimum of required time or available time
-        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
+        # Determine charging start time based on smart charging mode
+        if config.smart_charging_mode == "solar":
+            # Solar-aware charging: prefer daylight hours (10:00-16:00)
+            solar_start_minute = day_start_minute + (10 * 60)  # 10:00
+            solar_end_minute = day_start_minute + (16 * 60)  # 16:00
+
+            # Find overlap between solar window and available charging window
+            charging_start_minute = max(arrival_minute, solar_start_minute)
+            charging_window_end = min(departure_minute, solar_end_minute)
+
+            # Check if there's enough time in the solar window
+            solar_window_minutes = max(0, charging_window_end - charging_start_minute)
+
+            if solar_window_minutes >= charging_minutes_needed:
+                # Enough time in solar window - charge during solar hours
+                actual_charging_minutes = charging_minutes_needed
+            else:
+                # Not enough time in solar window - use as much solar time as possible
+                # then charge immediately after solar window or from arrival
+                if solar_window_minutes > 0:
+                    # Partial solar charging + remaining time after solar window
+                    charging_start_minute = max(arrival_minute, solar_start_minute)
+                    actual_charging_minutes = min(charging_minutes_needed, available_minutes)
+                else:
+                    # No overlap with solar window - start charging at arrival
+                    charging_start_minute = arrival_minute
+                    actual_charging_minutes = min(charging_minutes_needed, available_minutes)
+        else:
+            # Dumb charging (mode="none") or off-peak (not yet implemented)
+            # Start charging immediately on arrival
+            charging_start_minute = arrival_minute
+            actual_charging_minutes = min(charging_minutes_needed, available_minutes)
 
         # Set power during charging period
-        charging_end_minute = arrival_minute + actual_charging_minutes
-        power_kw[arrival_minute:charging_end_minute] = charger_power_kw
+        charging_end_minute = charging_start_minute + actual_charging_minutes
+        power_kw[charging_start_minute:charging_end_minute] = charger_power_kw
 
     # Create time index for the full period at minute resolution
     time_index = pd.date_range(
