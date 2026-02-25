@@ -26,6 +26,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, simulate_home
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
+from solar_challenge.tariff import TariffConfig, TariffPeriod
 
 
 class ConfigurationError(Exception):
@@ -416,6 +417,7 @@ class ScenarioConfig:
         home: Single home configuration (for single-home simulation)
         output: Output preferences
         seg_tariff_pence_per_kwh: Smart Export Guarantee rate in pence/kWh (optional)
+        tariff_config: Tariff configuration (None for no cost tracking)
     """
 
     name: str
@@ -426,6 +428,7 @@ class ScenarioConfig:
     home: Optional[HomeConfig] = None
     output: Optional[OutputConfig] = None
     seg_tariff_pence_per_kwh: Optional[float] = None
+    tariff_config: Optional[TariffConfig] = None
 
     def __post_init__(self) -> None:
         """Validate scenario configuration."""
@@ -603,11 +606,114 @@ def _parse_dispatch_strategy_config(
     )
 
 
+def _parse_tariff_config(data: Optional[dict[str, Any]]) -> Optional[TariffConfig]:
+    """Parse tariff configuration from config data.
+
+    Supports preset tariffs (flat_rate, economy_7, economy_10) and custom
+    tariff definitions with explicit periods.
+
+    Args:
+        data: Tariff configuration dictionary or None
+
+    Returns:
+        TariffConfig object or None if data is None
+
+    Raises:
+        ConfigurationError: If tariff specification is invalid
+    """
+    if data is None:
+        return None
+
+    tariff_type = data.get("type")
+    if tariff_type is None:
+        raise ConfigurationError("Tariff configuration requires 'type' field")
+
+    if tariff_type == "flat_rate":
+        rate = data.get("rate_per_kwh")
+        if rate is None:
+            raise ConfigurationError("flat_rate tariff requires 'rate_per_kwh' field")
+        return TariffConfig.flat_rate(
+            rate_per_kwh=float(rate),
+            name=data.get("name", "")
+        )
+
+    elif tariff_type == "economy_7":
+        kwargs: dict[str, Any] = {}
+        if "off_peak_rate" in data:
+            kwargs["off_peak_rate"] = float(data["off_peak_rate"])
+        if "peak_rate" in data:
+            kwargs["peak_rate"] = float(data["peak_rate"])
+        if "off_peak_start" in data:
+            kwargs["off_peak_start"] = data["off_peak_start"]
+        if "off_peak_end" in data:
+            kwargs["off_peak_end"] = data["off_peak_end"]
+        return TariffConfig.economy_7(**kwargs)
+
+    elif tariff_type == "economy_10":
+        kwargs = {}
+        if "off_peak_rate" in data:
+            kwargs["off_peak_rate"] = float(data["off_peak_rate"])
+        if "peak_rate" in data:
+            kwargs["peak_rate"] = float(data["peak_rate"])
+        if "night_start" in data:
+            kwargs["night_start"] = data["night_start"]
+        if "night_end" in data:
+            kwargs["night_end"] = data["night_end"]
+        if "afternoon_start" in data:
+            kwargs["afternoon_start"] = data["afternoon_start"]
+        if "afternoon_end" in data:
+            kwargs["afternoon_end"] = data["afternoon_end"]
+        if "evening_start" in data:
+            kwargs["evening_start"] = data["evening_start"]
+        if "evening_end" in data:
+            kwargs["evening_end"] = data["evening_end"]
+        return TariffConfig.economy_10(**kwargs)
+
+    elif tariff_type == "custom":
+        if "periods" not in data:
+            raise ConfigurationError("custom tariff requires 'periods' field")
+
+        periods_data = data["periods"]
+        if not periods_data:
+            raise ConfigurationError("custom tariff must have at least one period")
+
+        periods = []
+        for period_data in periods_data:
+            if "start_time" not in period_data:
+                raise ConfigurationError("Tariff period requires 'start_time' field")
+            if "end_time" not in period_data:
+                raise ConfigurationError("Tariff period requires 'end_time' field")
+            if "rate_per_kwh" not in period_data:
+                raise ConfigurationError("Tariff period requires 'rate_per_kwh' field")
+
+            periods.append(
+                TariffPeriod(
+                    start_time=period_data["start_time"],
+                    end_time=period_data["end_time"],
+                    rate_per_kwh=float(period_data["rate_per_kwh"]),
+                    name=period_data.get("name", "")
+                )
+            )
+
+        return TariffConfig(
+            periods=tuple(periods),
+            name=data.get("name", "")
+        )
+
+    else:
+        raise ConfigurationError(
+            f"Unknown tariff type '{tariff_type}'. "
+            "Supported types: flat_rate, economy_7, economy_10, custom"
+        )
+
+
 def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
     """Parse home configuration from config data."""
     pv_data = data.get("pv", {})
     battery_data = data.get("battery")
     load_data = data.get("load", {})
+    tariff_data = data.get("tariff")
+    dispatch_strategy = data.get("dispatch_strategy", "greedy")
 
     return HomeConfig(
         pv_config=_parse_pv_config(pv_data),
@@ -615,6 +721,8 @@ def _parse_home_config(data: dict[str, Any], location: Location) -> HomeConfig:
         load_config=_parse_load_config(load_data),
         location=location,
         name=data.get("name", ""),
+        tariff_config=_parse_tariff_config(tariff_data),
+        dispatch_strategy=dispatch_strategy,
     )
 
 
@@ -1058,6 +1166,8 @@ def generate_homes_from_distribution(
                 load_config=load_config,
                 location=location,
                 name=f"Home {i + 1}",
+                tariff_config=None,
+                dispatch_strategy="greedy",
             )
         )
 
@@ -1113,6 +1223,7 @@ def _parse_scenario(data: dict[str, Any]) -> ScenarioConfig:
         home=home,
         output=_parse_output_config(data.get("output")),
         seg_tariff_pence_per_kwh=_parse_seg_config(data.get("seg")),
+        tariff_config=_parse_tariff_config(data.get("tariff_config")),
     )
 
 
@@ -1496,6 +1607,8 @@ def _apply_parameter_to_home(
             battery_config=home.battery_config,
             location=location,
             name=home.name,
+            tariff_config=home.tariff_config,
+            dispatch_strategy=home.dispatch_strategy,
         )
     elif param_name in battery_params:
         battery_config = _modify_battery_config(home.battery_config, param_name, value)
@@ -1505,6 +1618,8 @@ def _apply_parameter_to_home(
             battery_config=battery_config,
             location=location,
             name=home.name,
+            tariff_config=home.tariff_config,
+            dispatch_strategy=home.dispatch_strategy,
         )
     elif param_name in load_params:
         load_config = _modify_load_config(home.load_config, param_name, value)
@@ -1514,6 +1629,8 @@ def _apply_parameter_to_home(
             battery_config=home.battery_config,
             location=location,
             name=home.name,
+            tariff_config=home.tariff_config,
+            dispatch_strategy=home.dispatch_strategy,
         )
     else:
         raise ConfigurationError(f"Unknown parameter for sweep: {param_name}")

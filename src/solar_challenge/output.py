@@ -201,6 +201,13 @@ def generate_summary_report(
 | Average Generation | {summary.total_generation_kwh / summary.simulation_days:.1f} |
 | Average Demand | {summary.total_demand_kwh / summary.simulation_days:.1f} |
 | Average Self-Consumption | {summary.total_self_consumption_kwh / summary.simulation_days:.1f} |
+
+## Financial (£)
+| Metric | Value |
+|--------|-------|
+| Grid Import Cost | {summary.total_import_cost_gbp:.2f} |
+| Grid Export Revenue | {summary.total_export_revenue_gbp:.2f} |
+| Net Cost | {summary.net_cost_gbp:.2f} |
 """
 
     if summary.seg_revenue_gbp is not None:

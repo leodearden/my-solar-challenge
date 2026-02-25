@@ -12,10 +12,11 @@ from solar_challenge.dispatch import (
     SelfConsumptionStrategy,
     TOUOptimizedStrategy,
 )
-from solar_challenge.flow import EnergyFlowResult, simulate_timestep, validate_energy_balance
+from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
+from solar_challenge.tariff import TariffConfig
 from solar_challenge.weather import get_tmy_data
 
 
@@ -29,6 +30,8 @@ class HomeConfig:
         battery_config: Battery configuration (None for PV-only)
         location: Geographic location for weather data
         name: Optional identifier for the home
+        tariff_config: Tariff configuration (None for no cost tracking)
+        dispatch_strategy: Battery dispatch strategy ("greedy" or "tou_optimized")
     """
 
     pv_config: PVConfig
@@ -36,6 +39,8 @@ class HomeConfig:
     battery_config: Optional[BatteryConfig] = None
     location: Location = Location.bristol()
     name: str = ""
+    tariff_config: Optional[TariffConfig] = None
+    dispatch_strategy: str = "greedy"
 
 
 @dataclass
@@ -53,6 +58,9 @@ class SimulationResults:
         battery_soc: Battery state of charge in kWh
         grid_import: Power imported from grid in kW
         grid_export: Power exported to grid in kW
+        import_cost: Cost of grid import in £
+        export_revenue: Revenue from grid export in £
+        tariff_rate: Tariff rate in £/kWh
         strategy_name: Name of the dispatch strategy used
     """
 
@@ -64,6 +72,9 @@ class SimulationResults:
     battery_soc: pd.Series
     grid_import: pd.Series
     grid_export: pd.Series
+    import_cost: pd.Series
+    export_revenue: pd.Series
+    tariff_rate: pd.Series
     strategy_name: str = "self_consumption"
 
     def to_dataframe(self) -> pd.DataFrame:
@@ -81,6 +92,9 @@ class SimulationResults:
             "battery_soc_kwh": self.battery_soc,
             "grid_import_kw": self.grid_import,
             "grid_export_kw": self.grid_export,
+            "import_cost_gbp": self.import_cost,
+            "export_revenue_gbp": self.export_revenue,
+            "tariff_rate_per_kwh": self.tariff_rate,
         })
 
 
@@ -88,7 +102,7 @@ class SimulationResults:
 class SummaryStatistics:
     """Summary statistics for a simulation period.
 
-    All energy values in kWh.
+    All energy values in kWh, all financial values in £.
     """
 
     total_generation_kwh: float
@@ -104,6 +118,9 @@ class SummaryStatistics:
     grid_dependency_ratio: float  # grid_import / demand
     export_ratio: float  # grid_export / generation
     simulation_days: int
+    total_import_cost_gbp: float  # total cost of grid imports in £
+    total_export_revenue_gbp: float  # total revenue from grid exports in £
+    net_cost_gbp: float  # net cost (import - export) in £
     strategy_name: str = "self_consumption"
     seg_revenue_gbp: Optional[float] = None
 
@@ -188,39 +205,75 @@ def simulate_home(
     if config.battery_config is not None:
         battery = Battery(config.battery_config)
 
-    # Create dispatch strategy
-    strategy = _create_dispatch_strategy(config)
+    # Determine dispatch approach:
+    # 1. BatteryConfig.dispatch_strategy (Strategy pattern from dispatch.py)
+    # 2. HomeConfig.dispatch_strategy == "tou_optimized" with tariff (tariff-based TOU)
+    # 3. Default: SelfConsumptionStrategy
+    use_tariff_tou = (
+        config.dispatch_strategy == "tou_optimized"
+        and config.tariff_config is not None
+        and (config.battery_config is None or config.battery_config.dispatch_strategy is None)
+    )
+
+    strategy: Optional[DispatchStrategy] = None
+    strategy_name = "self_consumption"
+    if not use_tariff_tou:
+        strategy = _create_dispatch_strategy(config)
+        strategy_name = strategy.name
+    else:
+        strategy_name = "tou_optimized"
 
     # Run timestep simulation
     results_list: list[EnergyFlowResult] = []
 
+    # Get index for timestamp lookup
+    index = minute_demand.index
+
     for timestamp, (gen_kw, dem_kw) in zip(
-        minute_demand.index, zip(aligned_generation, minute_demand, strict=True), strict=True
+        index, zip(aligned_generation, minute_demand, strict=True), strict=True
     ):
-        result = simulate_timestep(
-            generation_kw=float(gen_kw),
-            demand_kw=float(dem_kw),
-            battery=battery,
-            timestep_minutes=1.0,
-            timestamp=timestamp.to_pydatetime(),
-            strategy=strategy,
-        )
+        if use_tariff_tou:
+            result = simulate_timestep_tou(
+                generation_kw=float(gen_kw),
+                demand_kw=float(dem_kw),
+                battery=battery,
+                timestamp=timestamp,
+                tariff=config.tariff_config,  # type: ignore[arg-type]
+                timestep_minutes=1.0,
+            )
+        else:
+            result = simulate_timestep(
+                generation_kw=float(gen_kw),
+                demand_kw=float(dem_kw),
+                battery=battery,
+                timestep_minutes=1.0,
+                timestamp=timestamp.to_pydatetime(),
+                strategy=strategy,
+            )
 
         if validate_balance:
             validate_energy_balance(result)
 
         results_list.append(result)
 
-    # Convert results to time series
-    index = minute_demand.index
-
     # Convert energy (kWh) back to power (kW) for 1-minute timesteps
     # Energy in kWh for 1 minute = Power in kW * (1/60) hours
     # So Power in kW = Energy in kWh * 60
     conversion_factor = 60.0
 
+    # Calculate tariff costs if tariff is configured
+    if config.tariff_config is not None:
+        tariff_rates = [config.tariff_config.get_rate(ts) for ts in index]
+        import_costs = [r.grid_import * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
+        # Export revenue: use same rate as import for now (can be enhanced with separate export tariff)
+        export_revenues = [r.grid_export * rate for r, rate in zip(results_list, tariff_rates, strict=True)]
+    else:
+        tariff_rates = [0.0 for _ in results_list]
+        import_costs = [0.0 for _ in results_list]
+        export_revenues = [0.0 for _ in results_list]
+
     return SimulationResults(
-        strategy_name=strategy.name,
+        strategy_name=strategy_name,
         generation=pd.Series(
             [r.generation * conversion_factor for r in results_list],
             index=index,
@@ -260,6 +313,21 @@ def simulate_home(
             [r.grid_export * conversion_factor for r in results_list],
             index=index,
             name="grid_export_kw",
+        ),
+        import_cost=pd.Series(
+            import_costs,
+            index=index,
+            name="import_cost_gbp",
+        ),
+        export_revenue=pd.Series(
+            export_revenues,
+            index=index,
+            name="export_revenue_gbp",
+        ),
+        tariff_rate=pd.Series(
+            tariff_rates,
+            index=index,
+            name="tariff_rate_per_kwh",
         ),
     )
 
@@ -320,6 +388,11 @@ def calculate_summary(
     peak_gen = float(results.generation.max())
     peak_demand = float(results.demand.max())
 
+    # Calculate financial totals
+    total_import_cost = float(results.import_cost.sum())
+    total_export_revenue = float(results.export_revenue.sum())
+    net_cost = total_import_cost - total_export_revenue
+
     # Calculate ratios with zero-division protection
     self_consumption_ratio = total_self / total_gen if total_gen > 0 else 0.0
     grid_dependency_ratio = total_import / total_demand if total_demand > 0 else 0.0
@@ -347,6 +420,9 @@ def calculate_summary(
         grid_dependency_ratio=grid_dependency_ratio,
         export_ratio=export_ratio,
         simulation_days=sim_days,
+        total_import_cost_gbp=total_import_cost,
+        total_export_revenue_gbp=total_export_revenue,
+        net_cost_gbp=net_cost,
         strategy_name=results.strategy_name,
         seg_revenue_gbp=seg_revenue_gbp,
     )

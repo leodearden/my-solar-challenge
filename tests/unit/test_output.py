@@ -34,6 +34,9 @@ def sample_results() -> SimulationResults:
         battery_soc=pd.Series([2.5] * 2880, index=index),
         grid_import=pd.Series([0.0] * 2880, index=index),
         grid_export=pd.Series([0.5] * 2880, index=index),
+        import_cost=pd.Series([0.0] * 2880, index=index),
+        export_revenue=pd.Series([0.01] * 2880, index=index),  # 0.01 £ per minute
+        tariff_rate=pd.Series([0.20] * 2880, index=index),  # 0.20 £/kWh constant
     )
 
 
@@ -96,6 +99,15 @@ class TestGenerateSummaryReport:
         assert "Self-Consumption" in report
         assert "Grid Import" in report
         assert "Grid Export" in report
+
+    def test_includes_financial_section(self, sample_results):
+        """Report includes financial section with bill totals and savings."""
+        report = generate_summary_report(sample_results)
+
+        assert "## Financial" in report
+        assert "Grid Import Cost" in report
+        assert "Grid Export Revenue" in report
+        assert "Net Cost" in report
 
 
 class TestRatioCalculations:

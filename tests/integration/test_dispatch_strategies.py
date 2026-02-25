@@ -33,7 +33,7 @@ def _make_config(
     )
     return HomeConfig(
         pv_config=PVConfig.default_4kw(),
-        load_config=LoadConfig(annual_consumption_kwh=3400.0),
+        load_config=LoadConfig(annual_consumption_kwh=3400.0, seed=42),
         battery_config=battery,
         location=Location.bristol(),
         name=name,
@@ -308,7 +308,7 @@ class TestDefaultStrategyBackwardCompatibility:
         """Home with no dispatch strategy behaves like self-consumption."""
         no_strategy_config = HomeConfig(
             pv_config=PVConfig.default_4kw(),
-            load_config=LoadConfig(annual_consumption_kwh=3400.0),
+            load_config=LoadConfig(annual_consumption_kwh=3400.0, seed=42),
             battery_config=BatteryConfig(capacity_kwh=5.0),
             location=Location.bristol(),
             name="No strategy",

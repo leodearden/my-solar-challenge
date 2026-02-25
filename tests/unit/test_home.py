@@ -66,6 +66,9 @@ class TestSimulationResults:
             battery_soc=pd.Series([2.5] * 60, index=index),
             grid_import=pd.Series([0.0] * 60, index=index),
             grid_export=pd.Series([0.5] * 60, index=index),
+            import_cost=pd.Series([0.0] * 60, index=index),
+            export_revenue=pd.Series([0.05] * 60, index=index),
+            tariff_rate=pd.Series([0.10] * 60, index=index),
         )
 
     def test_to_dataframe(self, sample_results):
@@ -130,6 +133,9 @@ class TestCalculateSummary:
             battery_soc=pd.Series([2.5] * 1440, index=index),
             grid_import=pd.Series([0.0] * 1440, index=index),
             grid_export=pd.Series([0.5] * 1440, index=index),
+            import_cost=pd.Series([0.0] * 1440, index=index),
+            export_revenue=pd.Series([0.05] * 1440, index=index),
+            tariff_rate=pd.Series([0.10] * 1440, index=index),
         )
 
     def test_calculates_totals(self, sample_results):
@@ -173,6 +179,9 @@ class TestCalculateSummary:
             battery_soc=pd.Series([0.0] * 60, index=index),
             grid_import=pd.Series([1.0] * 60, index=index),
             grid_export=pd.Series([0.0] * 60, index=index),
+            import_cost=pd.Series([0.10] * 60, index=index),
+            export_revenue=pd.Series([0.0] * 60, index=index),
+            tariff_rate=pd.Series([0.10] * 60, index=index),
         )
 
         summary = calculate_summary(results)
@@ -194,6 +203,34 @@ class TestCalculateSummary:
 
         assert summary.seg_revenue_gbp is None
 
+    def test_calculates_financial_statistics(self):
+        """Calculates financial statistics correctly."""
+        index = pd.date_range("2024-06-21 00:00", periods=1440, freq="1min")
+        results = SimulationResults(
+            generation=pd.Series([3.0] * 1440, index=index),
+            demand=pd.Series([2.0] * 1440, index=index),
+            self_consumption=pd.Series([1.5] * 1440, index=index),
+            battery_charge=pd.Series([0.0] * 1440, index=index),
+            battery_discharge=pd.Series([0.0] * 1440, index=index),
+            battery_soc=pd.Series([0.0] * 1440, index=index),
+            grid_import=pd.Series([0.5] * 1440, index=index),
+            grid_export=pd.Series([1.5] * 1440, index=index),
+            import_cost=pd.Series([0.05] * 1440, index=index),  # £0.05 per minute
+            export_revenue=pd.Series([0.03] * 1440, index=index),  # £0.03 per minute
+            tariff_rate=pd.Series([0.10] * 1440, index=index),
+        )
+
+        summary = calculate_summary(results)
+
+        # Total import cost = £0.05 * 1440 minutes = £72.00
+        assert summary.total_import_cost_gbp == pytest.approx(72.0, rel=0.01)
+
+        # Total export revenue = £0.03 * 1440 minutes = £43.20
+        assert summary.total_export_revenue_gbp == pytest.approx(43.2, rel=0.01)
+
+        # Net cost = £72.00 - £43.20 = £28.80
+        assert summary.net_cost_gbp == pytest.approx(28.8, rel=0.01)
+
 
 class TestSummaryStatistics:
     """Test SummaryStatistics dataclass."""
@@ -214,6 +251,9 @@ class TestSummaryStatistics:
             grid_dependency_ratio=0.25,
             export_ratio=0.4,
             simulation_days=7,
+            total_import_cost_gbp=5.0,
+            total_export_revenue_gbp=8.0,
+            net_cost_gbp=-3.0,
         )
         assert stats.total_generation_kwh == 100.0
         assert stats.simulation_days == 7
