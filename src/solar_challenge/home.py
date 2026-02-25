@@ -197,6 +197,7 @@ def simulate_home(
         start_date,
         end_date,
         timezone=config.location.timezone,
+        ev_config=config.ev_config,
     )
 
     # Align generation to demand index (TMY data may have different dates)
