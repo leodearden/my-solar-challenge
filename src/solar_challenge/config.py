@@ -349,6 +349,7 @@ class FleetDistributionConfig:
         pv: PV distribution configuration
         load: Load distribution configuration
         battery: Battery distribution configuration (optional)
+        heat_pump: Heat pump distribution configuration (optional)
         seed: Random seed for reproducibility (optional)
         random_order: Order of random operations ("default" or "bristol_legacy")
             - "default": Shuffle pools first, then sample normal distributions per home
@@ -360,6 +361,7 @@ class FleetDistributionConfig:
     pv: PVDistributionConfig
     load: LoadDistributionConfig
     battery: Optional[BatteryDistributionConfig] = None
+    heat_pump: Optional[HeatPumpDistributionConfig] = None
     seed: Optional[int] = None
     random_order: str = "default"
 
