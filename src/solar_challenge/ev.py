@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
+import numpy as np
+import pandas as pd
+
 
 class EVChargerType(str, Enum):
     """Standard UK domestic EV charger types.
@@ -145,3 +148,82 @@ class EVConfig:
             Available charging hours between arrival and departure
         """
         return self._calculate_available_hours()
+
+
+def generate_ev_charging_profile(
+    config: EVConfig,
+    start_date: pd.Timestamp,
+    end_date: pd.Timestamp,
+    timezone: str = "Europe/London",
+) -> pd.Series:
+    """Generate EV charging load profile.
+
+    For dumb charging (smart_charging_mode="none"), charging starts immediately
+    on arrival and continues at full power until required energy is delivered.
+
+    Args:
+        config: EV configuration
+        start_date: Start of simulation period
+        end_date: End of simulation period (inclusive)
+        timezone: Timezone for the simulation
+
+    Returns:
+        Time series of charging power in kW at 1-minute resolution
+    """
+    # Create minute-by-minute time index for the full period
+    date_range = pd.date_range(
+        start=start_date,
+        end=end_date,
+        freq="D",
+        tz=timezone,
+    )
+
+    # Calculate total minutes in the period
+    n_days = len(date_range)
+    n_minutes = n_days * 1440
+
+    # Initialize power array (kW) - zeros everywhere by default
+    power_kw = np.zeros(n_minutes, dtype=np.float64)
+
+    # Get charger power
+    charger_power_kw = config.get_charger_power_kw()
+
+    # Calculate how many minutes of charging are needed
+    # Energy (kWh) = Power (kW) × Time (hours)
+    # Time (hours) = Energy (kWh) / Power (kW)
+    charging_hours_needed = config.required_charge_kwh / charger_power_kw
+    charging_minutes_needed = int(np.ceil(charging_hours_needed * 60))
+
+    # For each day, apply the charging schedule
+    for day_idx in range(n_days):
+        day_start_minute = day_idx * 1440
+        arrival_minute = day_start_minute + (config.arrival_hour * 60)
+        departure_minute = day_start_minute + (config.departure_hour * 60)
+
+        # Handle overnight charging (departure before arrival next day)
+        if config.departure_hour <= config.arrival_hour:
+            # Overnight case: e.g., arrive 18:00, depart 07:00 next day
+            departure_minute += 1440  # Next day
+
+        # Calculate available charging window
+        available_minutes = departure_minute - arrival_minute
+
+        # Charge for the minimum of required time or available time
+        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
+
+        # Set power during charging period
+        charging_end_minute = arrival_minute + actual_charging_minutes
+        power_kw[arrival_minute:charging_end_minute] = charger_power_kw
+
+    # Create time index for the full period at minute resolution
+    time_index = pd.date_range(
+        start=start_date,
+        periods=n_minutes,
+        freq="1min",
+        tz=timezone,
+    )
+
+    # Create pandas Series
+    profile = pd.Series(power_kw, index=time_index, name=config.name or "EV Charging")
+
+    return profile
