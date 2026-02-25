@@ -3,9 +3,16 @@
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+import pandas as pd
+
 
 # Valid heat pump types
 HeatPumpType = Literal["ASHP", "GSHP"]
+
+
+# Base temperature for heating degree day calculations
+# UK standard base temperature for domestic heating demand
+BASE_TEMPERATURE_C: float = 15.5
 
 
 # COP curve parameters for Air Source Heat Pumps (ASHP)
@@ -23,6 +30,34 @@ GSHP_COP_BASE: float = 3.8  # Base COP (relatively constant)
 GSHP_COP_SLOPE: float = 0.02  # Small temperature dependency
 GSHP_COP_MIN: float = 3.2  # Minimum COP
 GSHP_COP_MAX: float = 4.8  # Maximum COP
+
+
+def calculate_heating_degree_minutes(
+    temperature_c: pd.Series,
+    base_temp_c: float = BASE_TEMPERATURE_C
+) -> pd.Series:
+    """Calculate heating degree minutes from temperature data.
+
+    Heating degree minutes quantify heating demand at each timestep.
+    When outdoor temperature falls below the base temperature, heating is required.
+    The degree minutes value represents the temperature deficit that must be made up.
+
+    This is the minute-resolution equivalent of heating degree days (HDD),
+    commonly used for UK heating demand calculations.
+
+    Args:
+        temperature_c: Time series of outdoor temperature in degrees Celsius
+        base_temp_c: Base temperature threshold for heating (default 15.5°C for UK)
+
+    Returns:
+        Series of heating degree minutes (°C-minutes), same length as input.
+        Zero when temperature is at or above base, positive when heating needed.
+    """
+    # Calculate temperature deficit below base temperature
+    # Negative values (temp above base) become zero (no heating needed)
+    degree_minutes = base_temp_c - temperature_c
+    degree_minutes = degree_minutes.clip(lower=0.0)
+    return degree_minutes
 
 
 def calculate_cop(heat_pump_type: HeatPumpType, outdoor_temp_c: float) -> float:
