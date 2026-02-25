@@ -158,8 +158,12 @@ def generate_ev_charging_profile(
 ) -> pd.Series:
     """Generate EV charging load profile.
 
-    For dumb charging (smart_charging_mode="none"), charging starts immediately
-    on arrival and continues at full power until required energy is delivered.
+    Supports multiple charging strategies:
+    - "none": Dumb charging - starts immediately on arrival
+    - "solar": Solar-aware - prefers daylight hours (10:00-16:00)
+    - "off_peak": Off-peak tariff - prefers Economy 7 hours (00:30-07:30)
+
+    All strategies ensure the required charge is delivered before departure.
 
     Args:
         config: EV configuration
@@ -235,8 +239,58 @@ def generate_ev_charging_profile(
                     # No overlap with solar window - start charging at arrival
                     charging_start_minute = arrival_minute
                     actual_charging_minutes = min(charging_minutes_needed, available_minutes)
+        elif config.smart_charging_mode == "off_peak":
+            # Off-peak tariff charging: prefer Economy 7 hours (00:30-07:30)
+            # Off-peak window for current day
+            off_peak_start_minute = day_start_minute + (0 * 60 + 30)  # 00:30
+            off_peak_end_minute = day_start_minute + (7 * 60 + 30)  # 07:30
+
+            # For overnight charging, also consider next day's off-peak window
+            if config.departure_hour <= config.arrival_hour:
+                # Overnight case - look at next day's off-peak window
+                next_day_off_peak_start = day_start_minute + 1440 + (0 * 60 + 30)  # Next day 00:30
+                next_day_off_peak_end = day_start_minute + 1440 + (7 * 60 + 30)  # Next day 07:30
+
+                # Find overlap with next day's off-peak window
+                charging_start_minute = max(arrival_minute, next_day_off_peak_start)
+                charging_window_end = min(departure_minute, next_day_off_peak_end)
+
+                # Check if there's enough time in the off-peak window
+                off_peak_window_minutes = max(0, charging_window_end - charging_start_minute)
+
+                if off_peak_window_minutes >= charging_minutes_needed:
+                    # Enough time in off-peak window - charge during off-peak hours
+                    actual_charging_minutes = charging_minutes_needed
+                else:
+                    # Not enough time - use available off-peak time + fallback
+                    if off_peak_window_minutes > 0:
+                        charging_start_minute = max(arrival_minute, next_day_off_peak_start)
+                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
+                    else:
+                        # No overlap - start at arrival
+                        charging_start_minute = arrival_minute
+                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
+            else:
+                # Same day charging - use current day's off-peak window
+                charging_start_minute = max(arrival_minute, off_peak_start_minute)
+                charging_window_end = min(departure_minute, off_peak_end_minute)
+
+                off_peak_window_minutes = max(0, charging_window_end - charging_start_minute)
+
+                if off_peak_window_minutes >= charging_minutes_needed:
+                    # Enough time in off-peak window
+                    actual_charging_minutes = charging_minutes_needed
+                else:
+                    # Not enough time in off-peak window
+                    if off_peak_window_minutes > 0:
+                        charging_start_minute = max(arrival_minute, off_peak_start_minute)
+                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
+                    else:
+                        # No overlap - start at arrival
+                        charging_start_minute = arrival_minute
+                        actual_charging_minutes = min(charging_minutes_needed, available_minutes)
         else:
-            # Dumb charging (mode="none") or off-peak (not yet implemented)
+            # Dumb charging (mode="none")
             # Start charging immediately on arrival
             charging_start_minute = arrival_minute
             actual_charging_minutes = min(charging_minutes_needed, available_minutes)
