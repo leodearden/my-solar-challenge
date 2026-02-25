@@ -13,7 +13,7 @@ from solar_challenge.dispatch import (
     TOUOptimizedStrategy,
 )
 from solar_challenge.flow import EnergyFlowResult, simulate_timestep, simulate_timestep_tou, validate_energy_balance
-from solar_challenge.heat_pump import HeatPumpConfig
+from solar_challenge.heat_pump import HeatPumpConfig, generate_heat_pump_load
 from solar_challenge.load import LoadConfig, generate_load_profile
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig, interpolate_to_minute_resolution, simulate_pv_output
@@ -198,6 +198,32 @@ def simulate_home(
         end_date,
         timezone=config.location.timezone,
     )
+
+    # Generate and add heat pump load if configured
+    if config.heat_pump_config is not None:
+        # Extract temperature from weather data
+        hourly_temperature = weather_data["temp_air"]
+
+        # Interpolate to 1-minute resolution
+        minute_temperature = interpolate_to_minute_resolution(hourly_temperature)
+
+        # Align temperature to demand index (same as generation alignment)
+        aligned_temperature = _align_tmy_to_demand(minute_temperature, minute_demand)
+
+        # Ensure temperature has timezone info matching demand
+        if aligned_temperature.index.tz is None and minute_demand.index.tz is not None:
+            aligned_temperature.index = aligned_temperature.index.tz_localize(minute_demand.index.tz)
+        elif aligned_temperature.index.tz != minute_demand.index.tz:
+            aligned_temperature.index = aligned_temperature.index.tz_convert(minute_demand.index.tz)
+
+        # Generate heat pump electrical load
+        heat_pump_load = generate_heat_pump_load(
+            config.heat_pump_config,
+            aligned_temperature,
+        )
+
+        # Add heat pump load to household demand
+        minute_demand = minute_demand + heat_pump_load
 
     # Align generation to demand index (TMY data may have different dates)
     # TMY data uses a synthetic year, so we map by time-of-year
