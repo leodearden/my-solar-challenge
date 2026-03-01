@@ -1,3 +1,25 @@
 {
-  "active": false
+  "active": true,
+  "spec": "011-web-persistence-layer",
+  "state": "building",
+  "subtasks": {
+    "completed": 0,
+    "total": 9,
+    "in_progress": 1,
+    "failed": 0
+  },
+  "phase": {
+    "current": "Database Module",
+    "id": null,
+    "total": 2
+  },
+  "workers": {
+    "active": 0,
+    "max": 1
+  },
+  "session": {
+    "number": 1,
+    "started_at": "2026-03-01T15:46:24.205754"
+  },
+  "last_update": "2026-03-01T15:46:24.258715"
 }
