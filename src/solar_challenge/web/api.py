@@ -556,3 +556,76 @@ def import_fleet_yaml() -> tuple[Response, int]:
         return jsonify({"error": str(exc)}), 400  # type: ignore[return-value]
 
     return jsonify(config), 200  # type: ignore[return-value]
+
+
+# ---------------------------------------------------------------------------
+# Parameter sweep endpoint
+# ---------------------------------------------------------------------------
+
+
+@api_bp.route("/simulate/sweep", methods=["POST"])
+def simulate_sweep() -> tuple[Response, int]:
+    """Submit a parameter sweep for background execution.
+
+    Generates a set of sweep points (linear or geometric) and returns
+    them for tracking.  Full job submission is deferred until the
+    JobManager integration is complete.
+
+    Expects a JSON body with:
+      - parameter: str (e.g. "pv_capacity_kw")
+      - min: float
+      - max: float
+      - steps: int (>= 2)
+      - mode: "linear" | "geometric"
+      - base_config: dict (optional base simulation configuration)
+
+    Returns:
+        JSON with sweep_id, parameter, values and job_ids, HTTP 201.
+    """
+    import uuid as _uuid  # noqa: PLC0415
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Request body must be JSON"}), 400  # type: ignore[return-value]
+
+    parameter = str(data.get("parameter", "pv_capacity_kw"))
+    try:
+        min_val = float(data.get("min", 1.0))
+        max_val = float(data.get("max", 10.0))
+        steps = int(data.get("steps", 5))
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": f"Invalid numeric parameter: {exc}"}), 400  # type: ignore[return-value]
+
+    if steps < 2:
+        return jsonify({"error": "Steps must be at least 2"}), 400  # type: ignore[return-value]
+    if min_val >= max_val:
+        return jsonify({"error": "Min must be less than max"}), 400  # type: ignore[return-value]
+
+    mode = str(data.get("mode", "linear"))
+    base_config = data.get("base_config", {})
+
+    # Generate sweep points
+    if mode == "geometric":
+        import math  # noqa: PLC0415
+
+        if min_val <= 0:
+            return jsonify({"error": "Min must be positive for geometric sweep"}), 400  # type: ignore[return-value]
+        log_min = math.log(min_val)
+        log_max = math.log(max_val)
+        values = [math.exp(log_min + (log_max - log_min) * i / (steps - 1)) for i in range(steps)]
+    else:
+        values = [min_val + (max_val - min_val) * i / (steps - 1) for i in range(steps)]
+
+    sweep_id = str(_uuid.uuid4())
+    job_ids: list[str] = []
+
+    # NOTE: Full job submission per sweep point would go here once
+    # the JobManager supports sweep orchestration.  For now we return
+    # the generated values so the UI can display them.
+
+    return jsonify({
+        "sweep_id": sweep_id,
+        "parameter": parameter,
+        "values": [round(v, 3) for v in values],
+        "job_ids": job_ids,
+    }), 201  # type: ignore[return-value]

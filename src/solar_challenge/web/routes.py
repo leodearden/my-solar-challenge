@@ -615,3 +615,98 @@ def simulate_fleet_page() -> str:
         presets=presets,
         page="simulate-fleet",
     )
+
+
+@bp.route("/results/fleet/<run_id>", methods=["GET"])
+def fleet_results(run_id: str) -> Any:
+    """Display results for a completed fleet simulation.
+
+    Loads persisted fleet results from storage, builds chart JSON
+    using the centralized charts module, and renders the fleet
+    results page with aggregate and per-home visualizations.
+
+    Args:
+        run_id: Unique identifier for the fleet simulation run.
+
+    Returns:
+        Rendered results/fleet.html template.
+    """
+    storage = get_storage()
+    try:
+        fleet_results_data, fleet_summary, per_home_summaries = storage.load_fleet_run(run_id)
+    except FileNotFoundError:
+        flash("Fleet run not found.", "error")
+        return redirect(url_for("main.index"))
+
+    from solar_challenge.web.charts import (  # noqa: PLC0415
+        fleet_aggregate_timeline,
+        fleet_box_plots,
+        fleet_distribution_histograms,
+        fleet_grid_impact,
+        fleet_heatmap,
+    )
+
+    summary_dict: dict[str, Any] = {
+        "n_homes": fleet_summary.n_homes,
+        "total_generation_kwh": round(fleet_summary.total_generation_kwh, 2),
+        "total_demand_kwh": round(fleet_summary.total_demand_kwh, 2),
+        "total_self_consumption_kwh": round(fleet_summary.total_self_consumption_kwh, 2),
+        "total_grid_import_kwh": round(fleet_summary.total_grid_import_kwh, 2),
+        "total_grid_export_kwh": round(fleet_summary.total_grid_export_kwh, 2),
+        "fleet_self_consumption_ratio": round(fleet_summary.fleet_self_consumption_ratio, 4),
+        "fleet_grid_dependency_ratio": round(fleet_summary.fleet_grid_dependency_ratio, 4),
+        "simulation_days": fleet_summary.simulation_days,
+    }
+
+    home_summaries = [
+        {
+            "total_generation_kwh": s.total_generation_kwh,
+            "total_demand_kwh": s.total_demand_kwh,
+            "total_self_consumption_kwh": s.total_self_consumption_kwh,
+            "total_grid_import_kwh": s.total_grid_import_kwh,
+            "total_grid_export_kwh": s.total_grid_export_kwh,
+            "self_consumption_ratio": s.self_consumption_ratio,
+            "grid_dependency_ratio": s.grid_dependency_ratio,
+            "export_ratio": s.export_ratio,
+        }
+        for s in per_home_summaries
+    ]
+
+    # Build aggregate SimulationResults for timeline/grid charts
+    # by summing per-home time series
+    aggregate = fleet_results_data.per_home_results[0]
+    if len(fleet_results_data.per_home_results) > 1:
+        from solar_challenge.home import SimulationResults as SR  # noqa: PLC0415
+
+        aggregate = SR(
+            generation=fleet_results_data.total_generation,
+            demand=fleet_results_data.total_demand,
+            self_consumption=fleet_results_data.total_self_consumption,
+            battery_charge=fleet_results_data.get_aggregate_series("battery_charge"),
+            battery_discharge=fleet_results_data.get_aggregate_series("battery_discharge"),
+            battery_soc=fleet_results_data.get_aggregate_series("battery_soc"),
+            grid_import=fleet_results_data.total_grid_import,
+            grid_export=fleet_results_data.total_grid_export,
+            import_cost=fleet_results_data.get_aggregate_series("import_cost"),
+            export_revenue=fleet_results_data.get_aggregate_series("export_revenue"),
+            tariff_rate=fleet_results_data.per_home_results[0].tariff_rate,
+            strategy_name="fleet_aggregate",
+        )
+
+    charts: dict[str, Any] = {
+        "aggregate_timeline": fleet_aggregate_timeline(aggregate),
+        "grid_impact": fleet_grid_impact(aggregate),
+        "heatmap": fleet_heatmap(home_summaries),
+        "box_plots": fleet_box_plots(home_summaries),
+        "distribution_histograms": fleet_distribution_histograms(home_summaries),
+    }
+
+    return render_template(
+        "results/fleet.html",
+        summary=summary_dict,
+        charts=charts,
+        n_homes=fleet_summary.n_homes,
+        run_id=run_id,
+        run_name="Fleet Simulation",
+        page="results",
+    )

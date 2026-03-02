@@ -807,3 +807,411 @@ def comparison_radar(summaries: list[dict[str, Any]], labels: list[str]) -> str:
         height=450,
     )
     return fig.to_json()
+
+
+# ---------------------------------------------------------------------------
+# Fleet charts (for fleet results page)
+# ---------------------------------------------------------------------------
+
+
+def fleet_aggregate_timeline(aggregate_results: SimulationResults) -> str:
+    """Stacked area chart of fleet aggregate totals over time.
+
+    Similar to power_flow_timeline but intended for aggregate fleet data.
+    Shows total generation, demand, self-consumption, grid import, and
+    grid export.
+
+    Args:
+        aggregate_results: Aggregated SimulationResults for the fleet.
+
+    Returns:
+        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    df = pd.DataFrame({
+        "PV Generation": aggregate_results.generation,
+        "Demand": aggregate_results.demand,
+        "Self-Consumption": aggregate_results.self_consumption,
+        "Grid Import": aggregate_results.grid_import,
+        "Grid Export": aggregate_results.grid_export,
+    })
+    df = _adaptive_downsample(df)
+
+    series_meta = [
+        ("PV Generation", COLOUR_PALETTE["pv_generation"]),
+        ("Demand", COLOUR_PALETTE["demand"]),
+        ("Self-Consumption", COLOUR_PALETTE["self_consumption"]),
+        ("Grid Import", COLOUR_PALETTE["grid_import"]),
+        ("Grid Export", COLOUR_PALETTE["grid_export"]),
+    ]
+
+    traces: list[Any] = []
+    dates = [d.isoformat() for d in df.index]
+    for col, colour in series_meta:
+        traces.append(
+            go.Scatter(
+                name=col,
+                x=dates,
+                y=df[col].round(4).tolist(),
+                mode="lines",
+                stackgroup="one",
+                line=dict(width=0.5, color=colour),
+                fillcolor=colour.replace(")", ",0.3)").replace("#", "rgba(")
+                if colour.startswith("rgba")
+                else None,
+            )
+        )
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        **_SHARED_LAYOUT,
+        title="Fleet Aggregate Power Flow",
+        xaxis=dict(
+            title="Time",
+            rangeslider=dict(visible=True),
+        ),
+        yaxis=dict(title="Power (kW)"),
+        height=500,
+    )
+    return fig.to_json()
+
+
+def fleet_grid_impact(aggregate_results: SimulationResults) -> str:
+    """Area chart showing net grid impact (import positive, export negative).
+
+    Calculates net = grid_import - grid_export at each timestep and
+    fills above zero (import region) and below zero (export region).
+
+    Args:
+        aggregate_results: Aggregated SimulationResults for the fleet.
+
+    Returns:
+        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    net = aggregate_results.grid_import - aggregate_results.grid_export
+    net = _adaptive_downsample_series(net)
+    dates = [d.isoformat() for d in net.index]
+    values = net.round(4).tolist()
+
+    # Import (positive) fill
+    import_values = [max(0, v) for v in values]
+    # Export (negative) fill
+    export_values = [min(0, v) for v in values]
+
+    traces: list[Any] = [
+        go.Scatter(
+            name="Grid Import",
+            x=dates,
+            y=import_values,
+            mode="lines",
+            fill="tozeroy",
+            line=dict(width=0.5, color=COLOUR_PALETTE["grid_import"]),
+            fillcolor="rgba(155,155,155,0.3)",
+        ),
+        go.Scatter(
+            name="Grid Export",
+            x=dates,
+            y=export_values,
+            mode="lines",
+            fill="tozeroy",
+            line=dict(width=0.5, color=COLOUR_PALETTE["grid_export"]),
+            fillcolor="rgba(74,144,226,0.3)",
+        ),
+    ]
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        **_SHARED_LAYOUT,
+        title="Net Grid Impact",
+        xaxis=dict(title="Time"),
+        yaxis=dict(title="Power (kW) — Import (+) / Export (-)"),
+        height=450,
+    )
+    return fig.to_json()
+
+
+def fleet_heatmap(home_summaries: list[dict[str, Any]]) -> str:
+    """Homes x metrics heatmap matrix.
+
+    Rows represent individual homes and columns represent energy
+    metrics (Generation, Demand, Self-Consumption, Grid Import,
+    Grid Export) in kWh.  Limits to the first 50 homes if there
+    are more.
+
+    Args:
+        home_summaries: List of dicts with per-home energy totals.
+
+    Returns:
+        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    summaries = home_summaries[:50]
+    metrics = [
+        ("total_generation_kwh", "Generation"),
+        ("total_demand_kwh", "Demand"),
+        ("total_self_consumption_kwh", "Self-Consumption"),
+        ("total_grid_import_kwh", "Grid Import"),
+        ("total_grid_export_kwh", "Grid Export"),
+    ]
+
+    y_labels = [f"Home {i+1}" for i in range(len(summaries))]
+    x_labels = [label for _, label in metrics]
+
+    z: list[list[float]] = []
+    for s in summaries:
+        row = [round(s.get(key, 0), 2) for key, _ in metrics]
+        z.append(row)
+
+    fig = go.Figure(data=go.Heatmap(
+        z=z,
+        x=x_labels,
+        y=y_labels,
+        colorscale="YlOrRd",
+        hoverongaps=False,
+    ))
+
+    fig.update_layout(
+        **_SHARED_LAYOUT,
+        title="Per-Home Energy Metrics",
+        xaxis=dict(title="Metric"),
+        yaxis=dict(title="Home", autorange="reversed"),
+        height=max(350, len(summaries) * 25 + 100),
+    )
+    return fig.to_json()
+
+
+def fleet_box_plots(home_summaries: list[dict[str, Any]]) -> str:
+    """Box plots of energy metrics across all homes.
+
+    One box per metric showing the distribution of values across
+    the fleet.
+
+    Args:
+        home_summaries: List of dicts with per-home energy totals.
+
+    Returns:
+        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    metrics = [
+        ("total_generation_kwh", "Generation", COLOUR_PALETTE["pv_generation"]),
+        ("total_demand_kwh", "Demand", COLOUR_PALETTE["demand"]),
+        ("total_self_consumption_kwh", "Self-Consumption", COLOUR_PALETTE["self_consumption"]),
+        ("total_grid_import_kwh", "Grid Import", COLOUR_PALETTE["grid_import"]),
+        ("total_grid_export_kwh", "Grid Export", COLOUR_PALETTE["grid_export"]),
+    ]
+
+    traces: list[Any] = []
+    for key, label, colour in metrics:
+        values = [s.get(key, 0) for s in home_summaries]
+        traces.append(go.Box(
+            name=label,
+            y=values,
+            marker_color=colour,
+            boxmean=True,
+        ))
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        **_SHARED_LAYOUT,
+        title="Energy Metrics Distribution Across Homes",
+        yaxis=dict(title="Energy (kWh)"),
+        height=450,
+    )
+    return fig.to_json()
+
+
+def fleet_distribution_histograms(home_summaries: list[dict[str, Any]]) -> str:
+    """Histograms showing distribution of key metrics across homes.
+
+    Three subplots: generation (kWh), self-consumption ratio, and
+    grid dependency ratio.
+
+    Args:
+        home_summaries: List of dicts with per-home energy totals and
+            ratios.
+
+    Returns:
+        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+        from plotly.subplots import make_subplots  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    fig = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=["Generation (kWh)", "Self-Consumption Ratio", "Grid Dependency Ratio"],
+    )
+
+    gen_values = [s.get("total_generation_kwh", 0) for s in home_summaries]
+    sc_values = [s.get("self_consumption_ratio", 0) for s in home_summaries]
+    gd_values = [s.get("grid_dependency_ratio", 0) for s in home_summaries]
+
+    fig.add_trace(
+        go.Histogram(
+            x=gen_values,
+            name="Generation",
+            marker_color=COLOUR_PALETTE["pv_generation"],
+        ),
+        row=1, col=1,
+    )
+    fig.add_trace(
+        go.Histogram(
+            x=sc_values,
+            name="Self-Consumption",
+            marker_color=COLOUR_PALETTE["self_consumption"],
+        ),
+        row=1, col=2,
+    )
+    fig.add_trace(
+        go.Histogram(
+            x=gd_values,
+            name="Grid Dependency",
+            marker_color=COLOUR_PALETTE["grid_import"],
+        ),
+        row=1, col=3,
+    )
+
+    fig.update_layout(
+        **_SHARED_LAYOUT,
+        title="Fleet Distribution Histograms",
+        showlegend=False,
+        height=400,
+    )
+    return fig.to_json()
+
+
+def fleet_summary_cards_data(fleet_summary: Any) -> list[dict[str, Any]]:
+    """Extract FleetSummary fields for template rendering.
+
+    Converts a FleetSummary dataclass into a list of dicts with
+    ``label``, ``value``, and ``unit`` keys suitable for rendering
+    stat cards in the template.
+
+    Args:
+        fleet_summary: FleetSummary instance.
+
+    Returns:
+        List of card data dicts.
+    """
+    cards: list[dict[str, Any]] = [
+        {"label": "Homes", "value": fleet_summary.n_homes, "unit": ""},
+        {"label": "Total Generation", "value": round(fleet_summary.total_generation_kwh, 1), "unit": "kWh"},
+        {"label": "Total Demand", "value": round(fleet_summary.total_demand_kwh, 1), "unit": "kWh"},
+        {"label": "Total Self-Consumption", "value": round(fleet_summary.total_self_consumption_kwh, 1), "unit": "kWh"},
+        {"label": "Fleet Self-Consumption Ratio", "value": round(fleet_summary.fleet_self_consumption_ratio * 100, 1), "unit": "%"},
+        {"label": "Fleet Grid Dependency", "value": round(fleet_summary.fleet_grid_dependency_ratio * 100, 1), "unit": "%"},
+        {"label": "Simulation Days", "value": fleet_summary.simulation_days, "unit": "days"},
+    ]
+    return cards
+
+
+# ---------------------------------------------------------------------------
+# Parameter sweep chart
+# ---------------------------------------------------------------------------
+
+
+def sweep_parameter_chart(
+    param_values: list[float],
+    metric_values: list[float],
+    param_name: str,
+    metric_name: str,
+) -> str:
+    """Line chart showing parameter vs metric for sweep results.
+
+    Plots the swept parameter values on the X-axis and the resulting
+    metric values on the Y-axis.  Highlights the optimal point (maximum
+    metric value) with an annotation and adds a linear trend line.
+
+    Args:
+        param_values: List of parameter values tested.
+        metric_values: Corresponding metric values for each parameter point.
+        param_name: Display name for the X-axis (e.g. "PV Capacity (kW)").
+        metric_name: Display name for the Y-axis (e.g. "Self-Consumption (%)").
+
+    Returns:
+        Plotly figure JSON string, or ``"{}"`` if Plotly is unavailable
+        or inputs are empty.
+    """
+    try:
+        import plotly.graph_objects as go  # noqa: PLC0415
+    except ImportError:
+        return "{}"
+
+    if not param_values or not metric_values:
+        return "{}"
+
+    # Main data trace
+    traces: list[Any] = [
+        go.Scatter(
+            name=metric_name,
+            x=param_values,
+            y=metric_values,
+            mode="lines+markers",
+            line=dict(color=COLOUR_PALETTE["pv_generation"], width=2.5),
+            marker=dict(size=8),
+        ),
+    ]
+
+    # Highlight optimal point (max metric value)
+    if metric_values:
+        best_idx = max(range(len(metric_values)), key=lambda i: metric_values[i])
+        traces.append(
+            go.Scatter(
+                name="Optimal",
+                x=[param_values[best_idx]],
+                y=[metric_values[best_idx]],
+                mode="markers+text",
+                marker=dict(size=14, color=COLOUR_PALETTE["self_consumption"], symbol="star"),
+                text=[f"{metric_values[best_idx]:.1f}"],
+                textposition="top center",
+                showlegend=True,
+            ),
+        )
+
+    # Simple linear trend line
+    if len(param_values) >= 2:
+        import numpy as np  # noqa: PLC0415
+
+        x_arr = np.array(param_values, dtype=float)
+        y_arr = np.array(metric_values, dtype=float)
+        coeffs = np.polyfit(x_arr, y_arr, 1)
+        trend_y = np.polyval(coeffs, x_arr)
+        traces.append(
+            go.Scatter(
+                name="Trend",
+                x=param_values,
+                y=trend_y.round(2).tolist(),
+                mode="lines",
+                line=dict(color=COLOUR_PALETTE["grid_import"], width=1.5, dash="dash"),
+            ),
+        )
+
+    fig = go.Figure(data=traces)
+    fig.update_layout(
+        **_SHARED_LAYOUT,
+        title=f"{metric_name} vs {param_name}",
+        xaxis=dict(title=param_name),
+        yaxis=dict(title=metric_name),
+        height=450,
+    )
+    return fig.to_json()
