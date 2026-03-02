@@ -1,46 +1,147 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Solar Challenge Dashboard{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <!-- HTMX for dynamic form submissions without writing JavaScript -->
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
-    <!-- Plotly.js for interactive energy charts -->
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
-    {% block head %}{% endblock %}
-</head>
-<body>
-    <header class="site-header">
-        <nav class="nav-container">
-            <a href="{{ url_for('main.index') }}" class="nav-brand">
-                ☀️ Solar Challenge
-            </a>
-            <ul class="nav-links">
-                <li><a href="{{ url_for('main.index') }}">Simulator</a></li>
-            </ul>
-        </nav>
-    </header>
 
-    <main class="main-content">
+    <!-- Favicon -->
+    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+
+    <!-- Tailwind CSS (CDN play mode) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: {
+                            50: '#fffbeb',
+                            100: '#fef3c7',
+                            200: '#fde68a',
+                            300: '#fcd34d',
+                            400: '#fbbf24',
+                            500: '#f59e0b',
+                            600: '#d97706',
+                            700: '#b45309',
+                            800: '#92400e',
+                            900: '#78350f',
+                        },
+                        secondary: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            200: '#bae6fd',
+                            300: '#7dd3fc',
+                            400: '#38bdf8',
+                            500: '#0ea5e9',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            800: '#075985',
+                            900: '#0c4a6e',
+                        },
+                        solar: {
+                            generation: '#f5a623',
+                            demand: '#d0021b',
+                            'self-consumption': '#7ed321',
+                            'grid-import': '#9b9b9b',
+                            'grid-export': '#4a90e2',
+                            battery: '#50e3c2',
+                        },
+                    },
+                },
+            },
+        }
+    </script>
+
+    <!-- Alpine.js -->
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+
+    <!-- HTMX 2.x -->
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+
+    <!-- HTMX SSE extension for real-time progress tracking -->
+    <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+
+    <!-- Plotly.js -->
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+
+    <!-- Project stylesheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+
+    {% block head %}{% endblock %}
+
+    <!-- Dark mode initialisation (before paint to prevent flash) -->
+    <script>
+        (function() {
+            var theme = localStorage.getItem('theme');
+            if (theme === 'dark' || (!theme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.documentElement.classList.add('dark');
+            }
+        })();
+    </script>
+</head>
+<body class="bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 min-h-screen"
+      x-data="{
+          sidebarOpen: localStorage.getItem('sidebarOpen') !== 'false',
+          mobileMenuOpen: false,
+          darkMode: document.documentElement.classList.contains('dark')
+      }"
+>
+    <!-- Sidebar navigation -->
+    {% include "partials/nav-sidebar.html" %}
+
+    <!-- Main content wrapper -->
+    <div class="transition-all duration-300 min-h-screen flex flex-col"
+         :class="sidebarOpen ? 'lg:ml-64' : 'lg:ml-16'"
+    >
+        <!-- Top bar (mobile) -->
+        <header class="sticky top-0 z-20 bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 lg:hidden">
+            <div class="flex items-center justify-between px-4 h-16">
+                <button
+                    @click="mobileMenuOpen = true"
+                    class="p-2 rounded-lg text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700"
+                    aria-label="Open menu"
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+                    </svg>
+                </button>
+                <a href="{{ url_for('main.index') }}" class="font-bold text-lg text-slate-800 dark:text-white">Solar Challenge</a>
+                <div class="w-10"></div>
+            </div>
+        </header>
+
+        <!-- Flash messages -->
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
-                <div class="flash-messages">
-                    {% for category, message in messages %}
-                        <div class="flash flash--{{ category }}">{{ message }}</div>
-                    {% endfor %}
-                </div>
+            <div class="px-4 sm:px-6 lg:px-8 pt-4 space-y-2">
+                {% for category, message in messages %}
+                <div class="px-4 py-3 rounded-lg text-sm font-medium border-l-4
+                    {% if category == 'error' %}
+                    bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-500
+                    {% elif category == 'success' %}
+                    bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border-green-500
+                    {% else %}
+                    bg-sky-50 dark:bg-sky-900/20 text-sky-700 dark:text-sky-400 border-sky-500
+                    {% endif %}
+                ">{{ message }}</div>
+                {% endfor %}
+            </div>
             {% endif %}
         {% endwith %}
 
-        {% block content %}{% endblock %}
-    </main>
+        <!-- Page content -->
+        <main class="flex-1 px-4 sm:px-6 lg:px-8 py-6">
+            {% block content %}{% endblock %}
+        </main>
 
-    <footer class="site-footer">
-        <div class="footer-container">
-            <p>Solar Challenge &mdash; Community energy simulation tool</p>
-        </div>
-    </footer>
+        <!-- Footer -->
+        <footer class="border-t border-slate-200 dark:border-slate-700 mt-auto">
+            <div class="px-4 sm:px-6 lg:px-8 py-4 text-center text-sm text-slate-500 dark:text-slate-400">
+                Solar Challenge &mdash; Community energy simulation tool
+            </div>
+        </footer>
+    </div>
 </body>
 </html>

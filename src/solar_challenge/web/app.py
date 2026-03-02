@@ -67,6 +67,14 @@ def create_app(test_config: dict | None = None) -> Flask:
         """
         close_db(db_path)
 
+    # Initialize JobManager for background simulation execution
+    try:
+        from solar_challenge.web.jobs import JobManager
+        app.extensions["job_manager"] = JobManager()
+    except ImportError:
+        # jobs.py not yet implemented
+        pass
+
     # Register blueprints (deferred to allow routes to exist independently)
     _register_blueprints(app)
 
@@ -107,6 +115,14 @@ def _register_blueprints(app: Flask) -> None:
         app.register_blueprint(scenarios_bp, url_prefix="/scenarios")
     except ImportError:
         # Scenarios blueprint not yet implemented
+        pass
+
+    # Register API blueprint (background simulation endpoints)
+    try:
+        from solar_challenge.web.api import api_bp
+        app.register_blueprint(api_bp)
+    except ImportError:
+        # API blueprint not yet implemented
         pass
 
     # Register assistant blueprint

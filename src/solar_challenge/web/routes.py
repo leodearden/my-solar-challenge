@@ -2,6 +2,7 @@
 
 import html
 import io
+import json
 import tempfile
 import uuid
 from pathlib import Path
@@ -167,10 +168,68 @@ def _build_battery_chart_json(results: Any) -> str:
     return fig.to_json()
 
 
+def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
+    """Compute aggregate statistics across all simulation runs.
+
+    Args:
+        storage: RunStorage instance to query.
+
+    Returns:
+        Dict with total_runs, total_homes, and total_energy_mwh.
+    """
+    all_runs = storage.list_runs()
+    total_runs = len(all_runs)
+    total_homes = 0
+    total_energy_kwh = 0.0
+
+    for run in all_runs:
+        total_homes += run.get("n_homes", 1) or 1
+        summary_json = run.get("summary_json")
+        if summary_json:
+            try:
+                summary = json.loads(summary_json) if isinstance(summary_json, str) else summary_json
+                # Home runs have total_generation_kwh at top level
+                gen = summary.get("total_generation_kwh", 0) or 0
+                total_energy_kwh += float(gen)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+
+    return {
+        "total_runs": total_runs,
+        "total_homes": total_homes,
+        "total_energy_mwh": round(total_energy_kwh / 1000.0, 2),
+    }
+
+
 @bp.route("/", methods=["GET"])
 def index() -> str:
-    """Render the simulation configuration form."""
-    return render_template("index.html")
+    """Render the dashboard page with recent runs and aggregate stats."""
+    storage = get_storage()
+    runs_raw = storage.list_runs(limit=10)
+    stats = _get_aggregate_stats(storage)
+
+    # Format runs for the template table
+    runs = []
+    for run in runs_raw:
+        runs.append({
+            "name": run.get("name", "Unnamed"),
+            "type": run.get("type", "home"),
+            "date": (run.get("created_at", "")[:10] if run.get("created_at") else ""),
+            "status": run.get("status", "unknown"),
+            "_row": [
+                run.get("name", "Unnamed"),
+                run.get("type", "home"),
+                (run.get("created_at", "")[:10] if run.get("created_at") else ""),
+                run.get("status", "unknown"),
+            ],
+        })
+
+    return render_template(
+        "dashboard.html",
+        runs=runs,
+        stats=stats,
+        page="dashboard",
+    )
 
 
 @bp.route("/simulate", methods=["POST"])

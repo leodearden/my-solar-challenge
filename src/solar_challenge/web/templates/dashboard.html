@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% from "partials/page-header.html" import page_header %}
+{% from "components/macros.html" import card, stat_card, data_table %}
+
+{% block title %}Solar Challenge &mdash; Dashboard{% endblock %}
+
+{% block content %}
+
+{{ page_header("Dashboard", subtitle="Overview of your solar energy simulations") }}
+
+<!-- Quick-start action cards -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+    <!-- Run Single Home -->
+    <a href="/simulate/home" class="group block bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 hover:shadow-md hover:border-amber-300 dark:hover:border-amber-600 transition-all">
+        <div class="flex items-center gap-4 mb-3">
+            <div class="p-3 bg-amber-50 dark:bg-amber-900/30 rounded-lg group-hover:bg-amber-100 dark:group-hover:bg-amber-900/50 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-amber-600 dark:text-amber-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
+                </svg>
+            </div>
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">Run Single Home</h3>
+        </div>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Simulate solar PV, battery storage, and energy flows for a single household.</p>
+    </a>
+
+    <!-- Run Fleet Simulation -->
+    <a href="/simulate/fleet" class="group block bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 hover:shadow-md hover:border-sky-300 dark:hover:border-sky-600 transition-all">
+        <div class="flex items-center gap-4 mb-3">
+            <div class="p-3 bg-sky-50 dark:bg-sky-900/30 rounded-lg group-hover:bg-sky-100 dark:group-hover:bg-sky-900/50 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-sky-600 dark:text-sky-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M9 6a3 3 0 11-6 0 3 3 0 016 0zM17 6a3 3 0 11-6 0 3 3 0 016 0zM12.93 17c.046-.327.07-.66.07-1a6.97 6.97 0 00-1.5-4.33A5 5 0 0119 16v1h-6.07zM6 11a5 5 0 015 5v1H1v-1a5 5 0 015-5z" />
+                </svg>
+            </div>
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white group-hover:text-sky-600 dark:group-hover:text-sky-400 transition-colors">Run Fleet Simulation</h3>
+        </div>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Model energy flows across multiple homes in a community energy fleet.</p>
+    </a>
+
+    <!-- Build Scenario -->
+    <a href="/scenarios/builder" class="group block bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-6 hover:shadow-md hover:border-emerald-300 dark:hover:border-emerald-600 transition-all">
+        <div class="flex items-center gap-4 mb-3">
+            <div class="p-3 bg-emerald-50 dark:bg-emerald-900/30 rounded-lg group-hover:bg-emerald-100 dark:group-hover:bg-emerald-900/50 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-emerald-600 dark:text-emerald-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
+                    <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm9.707 5.707a1 1 0 00-1.414-1.414L9 12.586l-1.293-1.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd" />
+                </svg>
+            </div>
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">Build Scenario</h3>
+        </div>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Create and configure custom simulation scenarios with fleet distributions.</p>
+    </a>
+</div>
+
+<!-- Aggregate stats -->
+<div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+    {{ stat_card("Total Runs", stats.total_runs, icon="&#9654;") }}
+    {{ stat_card("Homes Simulated", stats.total_homes, icon="&#127968;") }}
+    {{ stat_card("Energy Modelled", stats.total_energy_mwh, unit="MWh", icon="&#9889;") }}
+</div>
+
+<!-- Recent runs table -->
+{% call card(title="Recent Runs", subtitle="Last 10 simulation runs") %}
+{% if runs %}
+    {{ data_table(
+        columns=["Name", "Type", "Date", "Status"],
+        rows=runs | map(attribute='_row') | list if runs and runs[0] is mapping else [],
+        id="recent-runs-table"
+    ) }}
+{% else %}
+    <div class="text-center py-8">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto text-slate-300 dark:text-slate-600 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+        </svg>
+        <p class="text-slate-500 dark:text-slate-400 text-sm">No simulation runs yet.</p>
+        <p class="text-slate-400 dark:text-slate-500 text-xs mt-1">Run your first simulation to see results here.</p>
+    </div>
+{% endif %}
+{% endcall %}
+
+{% endblock %}

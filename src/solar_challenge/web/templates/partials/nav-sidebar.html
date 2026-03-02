@@ -1,0 +1,333 @@
+{#
+    nav-sidebar.html — Sidebar navigation partial.
+
+    Uses Alpine.js for collapsible groups and active page highlighting.
+    Expected variables:
+        page  str — current page identifier for active highlighting
+              (e.g. 'dashboard', 'simulate-home', 'simulate-fleet', etc.)
+    The sidebar state (expanded/collapsed) is controlled by the parent
+    Alpine.js x-data on the layout wrapper in base.html.
+#}
+
+<!-- Desktop sidebar -->
+<aside
+    class="fixed top-0 left-0 z-40 h-screen bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 transition-all duration-300 flex flex-col"
+    :class="sidebarOpen ? 'w-64' : 'w-16'"
+>
+    <!-- Brand header -->
+    <div class="flex items-center h-16 px-4 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
+        <a href="{{ url_for('main.index') }}" class="flex items-center gap-3 overflow-hidden">
+            <span class="text-2xl flex-shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-amber-500" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="12" r="5" />
+                    <line x1="12" y1="1" x2="12" y2="4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    <line x1="12" y1="20" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    <line x1="4.22" y1="4.22" x2="6.34" y2="6.34" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    <line x1="17.66" y1="17.66" x2="19.78" y2="19.78" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    <line x1="1" y1="12" x2="4" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    <line x1="20" y1="12" x2="23" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    <line x1="4.22" y1="19.78" x2="6.34" y2="17.66" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    <line x1="17.66" y1="6.34" x2="19.78" y2="4.22" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                </svg>
+            </span>
+            <span
+                class="font-bold text-lg text-slate-800 dark:text-white whitespace-nowrap transition-opacity duration-200"
+                :class="sidebarOpen ? 'opacity-100' : 'opacity-0 w-0'"
+            >Solar Challenge</span>
+        </a>
+    </div>
+
+    <!-- Navigation links -->
+    <nav class="flex-1 overflow-y-auto py-4 px-2" x-data="{ openGroup: '' }">
+        <!-- Dashboard -->
+        <a
+            href="{{ url_for('main.index') }}"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors"
+            :class="{
+                'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400': '{{ page }}' === 'dashboard',
+                'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700': '{{ page }}' !== 'dashboard'
+            }"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
+            </svg>
+            <span class="whitespace-nowrap transition-opacity duration-200" :class="sidebarOpen ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'">Dashboard</span>
+        </a>
+
+        <!-- Simulate group -->
+        <div class="mb-1">
+            <button
+                @click="openGroup = openGroup === 'simulate' ? '' : 'simulate'"
+                class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                :class="{
+                    'bg-slate-100 dark:bg-slate-700': openGroup === 'simulate' || '{{ page }}'.startsWith('simulate')
+                }"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd" />
+                </svg>
+                <span class="whitespace-nowrap flex-1 text-left transition-opacity duration-200" :class="sidebarOpen ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'">Simulate</span>
+                <svg
+                    xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform flex-shrink-0"
+                    :class="{'rotate-90': openGroup === 'simulate', 'opacity-0': !sidebarOpen}"
+                    viewBox="0 0 20 20" fill="currentColor"
+                >
+                    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                </svg>
+            </button>
+            <div x-show="(openGroup === 'simulate' || '{{ page }}'.startsWith('simulate')) && sidebarOpen" x-collapse>
+                <a
+                    href="/simulate/home"
+                    class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm transition-colors"
+                    :class="{
+                        'text-amber-700 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/30': '{{ page }}' === 'simulate-home',
+                        'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700': '{{ page }}' !== 'simulate-home'
+                    }"
+                >Single Home</a>
+                <a
+                    href="/simulate/fleet"
+                    class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm transition-colors"
+                    :class="{
+                        'text-amber-700 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/30': '{{ page }}' === 'simulate-fleet',
+                        'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700': '{{ page }}' !== 'simulate-fleet'
+                    }"
+                >Fleet</a>
+            </div>
+        </div>
+
+        <!-- Scenarios group -->
+        <div class="mb-1">
+            <button
+                @click="openGroup = openGroup === 'scenarios' ? '' : 'scenarios'"
+                class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                :class="{
+                    'bg-slate-100 dark:bg-slate-700': openGroup === 'scenarios' || '{{ page }}'.startsWith('scenario')
+                }"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
+                    <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd" />
+                </svg>
+                <span class="whitespace-nowrap flex-1 text-left transition-opacity duration-200" :class="sidebarOpen ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'">Scenarios</span>
+                <svg
+                    xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform flex-shrink-0"
+                    :class="{'rotate-90': openGroup === 'scenarios', 'opacity-0': !sidebarOpen}"
+                    viewBox="0 0 20 20" fill="currentColor"
+                >
+                    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                </svg>
+            </button>
+            <div x-show="(openGroup === 'scenarios' || '{{ page }}'.startsWith('scenario')) && sidebarOpen" x-collapse>
+                <a
+                    href="/scenarios/builder"
+                    class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm transition-colors"
+                    :class="{
+                        'text-amber-700 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/30': '{{ page }}' === 'scenarios-builder',
+                        'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700': '{{ page }}' !== 'scenarios-builder'
+                    }"
+                >Builder</a>
+                <a
+                    href="/scenarios/sweep"
+                    class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm transition-colors"
+                    :class="{
+                        'text-amber-700 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/30': '{{ page }}' === 'scenarios-sweep',
+                        'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700': '{{ page }}' !== 'scenarios-sweep'
+                    }"
+                >Sweeps</a>
+            </div>
+        </div>
+
+        <!-- History group -->
+        <div class="mb-1">
+            <button
+                @click="openGroup = openGroup === 'history' ? '' : 'history'"
+                class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+                :class="{
+                    'bg-slate-100 dark:bg-slate-700': openGroup === 'history' || '{{ page }}'.startsWith('history')
+                }"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd" />
+                </svg>
+                <span class="whitespace-nowrap flex-1 text-left transition-opacity duration-200" :class="sidebarOpen ? 'opacity-100' : 'opacity-0 w-0 overflow-hidden'">History</span>
+                <svg
+                    xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform flex-shrink-0"
+                    :class="{'rotate-90': openGroup === 'history', 'opacity-0': !sidebarOpen}"
+                    viewBox="0 0 20 20" fill="currentColor"
+                >
+                    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                </svg>
+            </button>
+            <div x-show="(openGroup === 'history' || '{{ page }}'.startsWith('history')) && sidebarOpen" x-collapse>
+                <a
+                    href="/history/runs"
+                    class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm transition-colors"
+                    :class="{
+                        'text-amber-700 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/30': '{{ page }}' === 'history-runs',
+                        'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700': '{{ page }}' !== 'history-runs'
+                    }"
+                >Runs</a>
+                <a
+                    href="/history/compare"
+                    class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm transition-colors"
+                    :class="{
+                        'text-amber-700 bg-amber-50 dark:text-amber-400 dark:bg-amber-900/30': '{{ page }}' === 'history-compare',
+                        'text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700': '{{ page }}' !== 'history-compare'
+                    }"
+                >Compare</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Sidebar footer with collapse toggle and theme toggle -->
+    <div class="border-t border-slate-200 dark:border-slate-700 px-2 py-3 flex-shrink-0">
+        <div class="flex items-center justify-between px-1">
+            {% include "partials/theme-toggle.html" %}
+            <button
+                @click="sidebarOpen = !sidebarOpen; localStorage.setItem('sidebarOpen', sidebarOpen)"
+                class="p-2 rounded-lg text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                :title="sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'"
+                aria-label="Toggle sidebar"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 transition-transform" :class="sidebarOpen ? '' : 'rotate-180'" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
+                </svg>
+            </button>
+        </div>
+    </div>
+</aside>
+
+<!-- Mobile overlay -->
+<div
+    x-show="mobileMenuOpen"
+    @click="mobileMenuOpen = false"
+    class="fixed inset-0 z-30 bg-black/50 lg:hidden"
+    x-transition:enter="transition-opacity duration-300"
+    x-transition:enter-start="opacity-0"
+    x-transition:enter-end="opacity-100"
+    x-transition:leave="transition-opacity duration-300"
+    x-transition:leave-start="opacity-100"
+    x-transition:leave-end="opacity-0"
+></div>
+
+<!-- Mobile sidebar -->
+<aside
+    x-show="mobileMenuOpen"
+    x-transition:enter="transition-transform duration-300"
+    x-transition:enter-start="-translate-x-full"
+    x-transition:enter-end="translate-x-0"
+    x-transition:leave="transition-transform duration-300"
+    x-transition:leave-start="translate-x-0"
+    x-transition:leave-end="-translate-x-full"
+    class="fixed top-0 left-0 z-50 h-screen w-64 bg-white dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex flex-col lg:hidden"
+>
+    <!-- Brand header -->
+    <div class="flex items-center justify-between h-16 px-4 border-b border-slate-200 dark:border-slate-700 flex-shrink-0">
+        <a href="{{ url_for('main.index') }}" class="flex items-center gap-3">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8 text-amber-500" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="12" r="5" />
+                <line x1="12" y1="1" x2="12" y2="4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <line x1="12" y1="20" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <line x1="4.22" y1="4.22" x2="6.34" y2="6.34" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <line x1="17.66" y1="17.66" x2="19.78" y2="19.78" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <line x1="1" y1="12" x2="4" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <line x1="20" y1="12" x2="23" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <line x1="4.22" y1="19.78" x2="6.34" y2="17.66" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                <line x1="17.66" y1="6.34" x2="19.78" y2="4.22" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+            <span class="font-bold text-lg text-slate-800 dark:text-white">Solar Challenge</span>
+        </a>
+        <button
+            @click="mobileMenuOpen = false"
+            class="p-2 rounded-lg text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+            aria-label="Close menu"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+            </svg>
+        </button>
+    </div>
+
+    <!-- Mobile navigation links -->
+    <nav class="flex-1 overflow-y-auto py-4 px-2" x-data="{ openGroup: '' }">
+        <a
+            href="{{ url_for('main.index') }}"
+            class="flex items-center gap-3 px-3 py-2.5 rounded-lg mb-1 transition-colors"
+            :class="{
+                'bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400': '{{ page }}' === 'dashboard',
+                'text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700': '{{ page }}' !== 'dashboard'
+            }"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
+            </svg>
+            <span>Dashboard</span>
+        </a>
+
+        <!-- Mobile Simulate group -->
+        <div class="mb-1">
+            <button
+                @click="openGroup = openGroup === 'simulate' ? '' : 'simulate'"
+                class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd" />
+                </svg>
+                <span class="flex-1 text-left">Simulate</span>
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform" :class="{'rotate-90': openGroup === 'simulate'}" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                </svg>
+            </button>
+            <div x-show="openGroup === 'simulate'" x-collapse>
+                <a href="/simulate/home" class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700">Single Home</a>
+                <a href="/simulate/fleet" class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700">Fleet</a>
+            </div>
+        </div>
+
+        <!-- Mobile Scenarios group -->
+        <div class="mb-1">
+            <button
+                @click="openGroup = openGroup === 'scenarios' ? '' : 'scenarios'"
+                class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
+                    <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd" />
+                </svg>
+                <span class="flex-1 text-left">Scenarios</span>
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform" :class="{'rotate-90': openGroup === 'scenarios'}" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                </svg>
+            </button>
+            <div x-show="openGroup === 'scenarios'" x-collapse>
+                <a href="/scenarios/builder" class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700">Builder</a>
+                <a href="/scenarios/sweep" class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700">Sweeps</a>
+            </div>
+        </div>
+
+        <!-- Mobile History group -->
+        <div class="mb-1">
+            <button
+                @click="openGroup = openGroup === 'history' ? '' : 'history'"
+                class="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd" />
+                </svg>
+                <span class="flex-1 text-left">History</span>
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform" :class="{'rotate-90': openGroup === 'history'}" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                </svg>
+            </button>
+            <div x-show="openGroup === 'history'" x-collapse>
+                <a href="/history/runs" class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700">Runs</a>
+                <a href="/history/compare" class="flex items-center gap-3 pl-11 pr-3 py-2 rounded-lg text-sm text-slate-500 hover:text-slate-700 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-slate-200 dark:hover:bg-slate-700">Compare</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Mobile sidebar footer -->
+    <div class="border-t border-slate-200 dark:border-slate-700 px-4 py-3 flex-shrink-0">
+        {% include "partials/theme-toggle.html" %}
+    </div>
+</aside>

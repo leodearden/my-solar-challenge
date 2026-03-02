@@ -45,6 +45,55 @@ class TestIndexRoute:
         assert "text/html" in response.content_type
 
 
+class TestDashboardRoute:
+    """Tests for the dashboard page rendered at GET /."""
+
+    def test_dashboard_returns_200(self, client: FlaskClient) -> None:
+        """Test GET / returns HTTP 200."""
+        response = client.get("/")
+        assert response.status_code == 200
+
+    def test_dashboard_contains_dashboard_text(self, client: FlaskClient) -> None:
+        """Test GET / response contains 'Dashboard' text."""
+        response = client.get("/")
+        assert b"Dashboard" in response.data
+
+    def test_dashboard_contains_sidebar_navigation(self, client: FlaskClient) -> None:
+        """Test GET / response contains sidebar navigation elements."""
+        response = client.get("/")
+        html_data = response.data.decode("utf-8")
+        # Sidebar should contain navigation group labels
+        assert "Simulate" in html_data
+        assert "Scenarios" in html_data
+        assert "History" in html_data
+
+    def test_dashboard_contains_quick_start_cards(self, client: FlaskClient) -> None:
+        """Test GET / response contains quick-start action cards."""
+        response = client.get("/")
+        html_data = response.data.decode("utf-8")
+        assert "Run Single Home" in html_data
+        assert "Run Fleet Simulation" in html_data
+        assert "Build Scenario" in html_data
+
+    def test_dashboard_contains_stats_section(self, client: FlaskClient) -> None:
+        """Test GET / response contains aggregate stats section."""
+        response = client.get("/")
+        html_data = response.data.decode("utf-8")
+        assert "Total Runs" in html_data
+        assert "Homes Simulated" in html_data
+        assert "Energy Modelled" in html_data
+
+    def test_dashboard_contains_recent_runs_section(self, client: FlaskClient) -> None:
+        """Test GET / response contains recent runs section."""
+        response = client.get("/")
+        html_data = response.data.decode("utf-8")
+        assert "Recent Runs" in html_data
+        # Should show either existing runs in a table or the empty state message
+        has_runs_table = "recent-runs-table" in html_data
+        has_empty_state = "No simulation runs yet" in html_data
+        assert has_runs_table or has_empty_state
+
+
 class TestSimulateRoute:
     """Tests for the POST /simulate route."""
 
