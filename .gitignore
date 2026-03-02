@@ -63,3 +63,6 @@ logs/
 # Auto Claude data directory
 .auto-claude/
 .auto-claude-status
+
+# Git worktrees
+.worktrees/
