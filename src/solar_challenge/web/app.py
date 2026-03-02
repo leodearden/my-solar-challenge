@@ -5,6 +5,8 @@ from pathlib import Path
 
 from flask import Flask
 
+from solar_challenge.web.database import close_db, init_db
+
 
 def create_app(test_config: dict | None = None) -> Flask:
     """Create and configure the Flask web dashboard application.
@@ -30,11 +32,17 @@ def create_app(test_config: dict | None = None) -> Flask:
         static_folder=static_folder,
     )
 
+    # Default data directory configuration
+    default_data_dir = Path.home() / ".solar-challenge"
+    default_db_path = default_data_dir / "solar-challenge.db"
+
     # Default configuration
     app.config.from_mapping(
         SECRET_KEY=os.environ.get("SECRET_KEY", "dev-secret-key-change-in-production"),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
+        DATA_DIR=str(default_data_dir),
+        DATABASE=str(default_db_path),
     )
 
     if test_config is not None:
@@ -45,7 +53,21 @@ def create_app(test_config: dict | None = None) -> Flask:
     for folder in (template_folder, static_folder):
         os.makedirs(folder, exist_ok=True)
 
-    # Register blueprints (deferred to allow routes.py to exist independently)
+    # Initialize database with configured path
+    db_path = app.config["DATABASE"]
+    init_db(db_path)
+
+    # Register database cleanup on app context teardown
+    @app.teardown_appcontext
+    def teardown_db(exception: Exception | None = None) -> None:
+        """Close database connection on app context teardown.
+
+        Args:
+            exception: Exception that caused teardown, if any.
+        """
+        close_db(db_path)
+
+    # Register blueprints (deferred to allow routes to exist independently)
     _register_blueprints(app)
 
     return app
@@ -54,14 +76,45 @@ def create_app(test_config: dict | None = None) -> Flask:
 def _register_blueprints(app: Flask) -> None:
     """Register application blueprints.
 
+    Attempts to register multiple blueprints for different feature areas:
+    - simulation: Main simulation interface (routes.py for now)
+    - history: Simulation run history and comparison
+    - scenarios: Saved configuration presets and templates
+    - assistant: AI chat assistant for simulation help
+
     Args:
         app: The Flask application instance.
     """
+    # Register main routes blueprint (simulation interface)
     try:
         from solar_challenge.web.routes import bp
         app.register_blueprint(bp)
     except ImportError:
         # Routes not yet implemented - skip registration during setup phase
+        pass
+
+    # Register history blueprint
+    try:
+        from solar_challenge.web.history import bp as history_bp
+        app.register_blueprint(history_bp, url_prefix="/history")
+    except ImportError:
+        # History blueprint not yet implemented
+        pass
+
+    # Register scenarios blueprint
+    try:
+        from solar_challenge.web.scenarios import bp as scenarios_bp
+        app.register_blueprint(scenarios_bp, url_prefix="/scenarios")
+    except ImportError:
+        # Scenarios blueprint not yet implemented
+        pass
+
+    # Register assistant blueprint
+    try:
+        from solar_challenge.web.assistant import bp as assistant_bp
+        app.register_blueprint(assistant_bp, url_prefix="/assistant")
+    except ImportError:
+        # Assistant blueprint not yet implemented
         pass
 
 
