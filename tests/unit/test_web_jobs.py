@@ -1,7 +1,11 @@
 """Tests for the background simulation API endpoints and job lifecycle."""
 
+import collections
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,6 +13,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from solar_challenge.web.app import create_app
+from solar_challenge.web.jobs import JobManager
 
 
 @pytest.fixture
@@ -328,3 +333,210 @@ class TestJobManagerIntegration:
         """Test that get_job_status returns None for unknown job IDs."""
         jm = app.extensions["job_manager"]
         assert jm.get_job_status("nonexistent") is None
+
+
+# ---------------------------------------------------------------------------
+# Direct JobManager unit tests (no Flask required)
+# ---------------------------------------------------------------------------
+
+
+class TestJobManagerDirect:
+    """Unit tests for JobManager exercised directly without Flask."""
+
+    def test_submit_home_job_with_mock(self, tmp_path: Path) -> None:
+        """Test submit_home_job creates in-memory tracking and returns IDs."""
+        from solar_challenge.web.database import init_db
+
+        db_path = str(tmp_path / "jobs.db")
+        data_dir = str(tmp_path / "data")
+        init_db(db_path)
+
+        jm = JobManager(max_workers=1)
+
+        # Mock simulate_home so we don't run real simulation
+        with patch("solar_challenge.web.jobs.simulate_home") as mock_sim, \
+             patch("solar_challenge.web.jobs.calculate_summary") as mock_summary:
+            mock_sim.return_value = MagicMock()
+            mock_summary.return_value = MagicMock()
+
+            from solar_challenge.home import HomeConfig
+            from solar_challenge.pv import PVConfig
+            from solar_challenge.load import LoadConfig
+            import pandas as pd
+
+            config = HomeConfig(
+                pv_config=PVConfig(capacity_kw=4.0),
+                load_config=LoadConfig(annual_consumption_kwh=3500),
+                name="Test",
+            )
+            start = pd.Timestamp("2024-06-01", tz="UTC")
+            end = pd.Timestamp("2024-06-02", tz="UTC")
+
+            job_id, run_id = jm.submit_home_job(
+                config=config,
+                start_date=start,
+                end_date=end,
+                db_path=db_path,
+                data_dir=data_dir,
+                name="Mock Sim",
+            )
+
+            # Verify returned IDs are non-empty strings
+            assert isinstance(job_id, str) and len(job_id) > 0
+            assert isinstance(run_id, str) and len(run_id) > 0
+
+            # Verify in-memory tracking was created
+            status = jm.get_job_status(job_id)
+            assert status is not None
+            assert status["job_id"] == job_id
+            assert status["run_id"] == run_id
+            assert status["status"] in ("queued", "running", "completed", "failed")
+
+    def test_thread_safety_concurrent_access(self, tmp_path: Path) -> None:
+        """Test that concurrent get_job_status and get_events calls are thread-safe."""
+        jm = JobManager(max_workers=1)
+
+        # Manually inject some jobs into internal state
+        with jm._lock:
+            for i in range(10):
+                jid = f"job-{i}"
+                jm._jobs[jid] = {
+                    "job_id": jid,
+                    "run_id": f"run-{i}",
+                    "status": "running",
+                    "progress_pct": 50.0,
+                    "current_step": "Testing",
+                    "message": "In progress",
+                    "created_at": time.monotonic(),
+                }
+                jm._event_queues[jid] = collections.deque(maxlen=100)
+                jm._event_queues[jid].append({"event": "progress", "data": {"pct": 50}})
+
+        errors: list[Exception] = []
+        barrier = threading.Barrier(20)
+
+        def worker(thread_id: int) -> None:
+            try:
+                barrier.wait(timeout=5)
+                for i in range(10):
+                    jid = f"job-{i}"
+                    # Read job status
+                    status = jm.get_job_status(jid)
+                    assert status is None or isinstance(status, dict)
+                    # Drain events
+                    events = list(jm.get_events(jid))
+                    assert isinstance(events, list)
+            except Exception as exc:
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in range(20)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+
+        assert len(errors) == 0, f"Thread safety errors: {errors}"
+
+    def test_get_events_drains_queue(self) -> None:
+        """Test that get_events yields events and clears the queue."""
+        jm = JobManager(max_workers=1)
+
+        job_id = "drain-test"
+        with jm._lock:
+            jm._jobs[job_id] = {
+                "job_id": job_id,
+                "run_id": "r1",
+                "status": "running",
+                "progress_pct": 0.0,
+                "current_step": "test",
+                "message": "test",
+                "created_at": time.monotonic(),
+            }
+            jm._event_queues[job_id] = collections.deque(maxlen=100)
+
+        # Add events
+        with jm._lock:
+            jm._event_queues[job_id].append({"event": "progress", "data": {"pct": 10}})
+            jm._event_queues[job_id].append({"event": "progress", "data": {"pct": 20}})
+            jm._event_queues[job_id].append({"event": "progress", "data": {"pct": 30}})
+
+        # First call should yield all 3 events
+        events = list(jm.get_events(job_id))
+        assert len(events) == 3
+        assert events[0]["data"]["pct"] == 10
+        assert events[2]["data"]["pct"] == 30
+
+        # Second call should yield nothing (queue was drained)
+        events_again = list(jm.get_events(job_id))
+        assert len(events_again) == 0
+
+    def test_get_events_unknown_job_yields_nothing(self) -> None:
+        """Test that get_events for an unknown job yields no events."""
+        jm = JobManager(max_workers=1)
+        events = list(jm.get_events("nonexistent-job-id"))
+        assert events == []
+
+    def test_ttl_cleanup_removes_old_jobs(self) -> None:
+        """Test that _cleanup_old_jobs removes entries older than the TTL."""
+        jm = JobManager(max_workers=1)
+
+        # Insert a job with a created_at time in the distant past
+        old_job_id = "old-job"
+        new_job_id = "new-job"
+        now = time.monotonic()
+
+        with jm._lock:
+            jm._jobs[old_job_id] = {
+                "job_id": old_job_id,
+                "run_id": "old-run",
+                "status": "completed",
+                "progress_pct": 100.0,
+                "current_step": "Done",
+                "message": "Done",
+                "created_at": now - 7200,  # 2 hours ago
+            }
+            jm._event_queues[old_job_id] = collections.deque(maxlen=100)
+
+            jm._jobs[new_job_id] = {
+                "job_id": new_job_id,
+                "run_id": "new-run",
+                "status": "running",
+                "progress_pct": 50.0,
+                "current_step": "Running",
+                "message": "Running",
+                "created_at": now,  # just now
+            }
+            jm._event_queues[new_job_id] = collections.deque(maxlen=100)
+
+        # Run cleanup with default 1-hour TTL
+        jm._cleanup_old_jobs(max_age_seconds=3600.0)
+
+        # Old job should be removed
+        assert jm.get_job_status(old_job_id) is None
+        assert old_job_id not in jm._event_queues
+
+        # New job should still exist
+        assert jm.get_job_status(new_job_id) is not None
+        assert new_job_id in jm._event_queues
+
+    def test_ttl_cleanup_preserves_all_when_young(self) -> None:
+        """Test that _cleanup_old_jobs preserves jobs within the TTL."""
+        jm = JobManager(max_workers=1)
+        now = time.monotonic()
+
+        with jm._lock:
+            jm._jobs["young-job"] = {
+                "job_id": "young-job",
+                "run_id": "run",
+                "status": "completed",
+                "progress_pct": 100.0,
+                "current_step": "Done",
+                "message": "Done",
+                "created_at": now - 60,  # 1 minute ago
+            }
+            jm._event_queues["young-job"] = collections.deque(maxlen=100)
+
+        jm._cleanup_old_jobs(max_age_seconds=3600.0)
+
+        # Should still be there
+        assert jm.get_job_status("young-job") is not None

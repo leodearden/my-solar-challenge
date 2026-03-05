@@ -5,8 +5,11 @@ streaming progress via SSE, and retrieving results.
 """
 
 import json
+import logging
 import time
 from typing import Any, Generator
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
@@ -218,7 +221,12 @@ def get_job_progress(job_id: str) -> Response:
 
     def generate_events() -> Generator[str, None, None]:
         """Generate SSE events for the job."""
+        start_time = time.time()
+        max_duration = 600  # 10 minutes
         while True:
+            if time.time() - start_time > max_duration:
+                yield "event: error\ndata: {\"error\": \"SSE stream timed out after 10 minutes\"}\n\n"
+                return
             # Check if job exists
             status = job_manager.get_job_status(job_id)
             if status is None:
@@ -340,7 +348,7 @@ def list_presets() -> tuple[Response, int]:
                 cfg["source"] = "saved"
                 saved.append(cfg)
     except Exception:  # noqa: BLE001
-        pass
+        logger.warning("Failed to load saved presets", exc_info=True)
 
     # Tag built-in presets
     builtin = [{**p, "source": "builtin"} for p in BUILTIN_PRESETS]
@@ -423,7 +431,7 @@ def get_preset(name: str) -> tuple[Response, int]:
             cfg["source"] = "saved"
             return jsonify(cfg), 200
     except Exception:  # noqa: BLE001
-        pass
+        logger.warning("Failed to load preset '%s' from database", name, exc_info=True)
 
     # Fall back to built-in presets
     for preset in BUILTIN_PRESETS:

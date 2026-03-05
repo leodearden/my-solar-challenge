@@ -7,6 +7,7 @@ tracking via SQLite and SSE event queues.
 
 import collections
 import json
+import threading
 import time
 import traceback
 import uuid
@@ -46,6 +47,7 @@ class JobManager:
             max_workers: Maximum number of concurrent simulation threads.
         """
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._event_queues: dict[str, collections.deque[dict[str, Any]]] = {}
 
@@ -74,20 +76,24 @@ class JobManager:
         Returns:
             Tuple of (job_id, run_id).
         """
+        self._cleanup_old_jobs()
+
         job_id = str(uuid.uuid4())
         run_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
 
         # Initialize in-memory tracking
-        self._jobs[job_id] = {
-            "job_id": job_id,
-            "run_id": run_id,
-            "status": "queued",
-            "progress_pct": 0.0,
-            "current_step": "Queued",
-            "message": "Waiting to start...",
-        }
-        self._event_queues[job_id] = collections.deque(maxlen=100)
+        with self._lock:
+            self._jobs[job_id] = {
+                "job_id": job_id,
+                "run_id": run_id,
+                "status": "queued",
+                "progress_pct": 0.0,
+                "current_step": "Queued",
+                "message": "Waiting to start...",
+                "created_at": time.monotonic(),
+            }
+            self._event_queues[job_id] = collections.deque(maxlen=100)
 
         # Create run record in database
         with get_db(db_path) as conn:
@@ -180,20 +186,24 @@ class JobManager:
         Returns:
             Tuple of (job_id, run_id).
         """
+        self._cleanup_old_jobs()
+
         job_id = str(uuid.uuid4())
         run_id = str(uuid.uuid4())
         created_at = datetime.now(timezone.utc).isoformat()
 
         # Initialize in-memory tracking
-        self._jobs[job_id] = {
-            "job_id": job_id,
-            "run_id": run_id,
-            "status": "queued",
-            "progress_pct": 0.0,
-            "current_step": "Queued",
-            "message": "Waiting to start...",
-        }
-        self._event_queues[job_id] = collections.deque(maxlen=100)
+        with self._lock:
+            self._jobs[job_id] = {
+                "job_id": job_id,
+                "run_id": run_id,
+                "status": "queued",
+                "progress_pct": 0.0,
+                "current_step": "Queued",
+                "message": "Waiting to start...",
+                "created_at": time.monotonic(),
+            }
+            self._event_queues[job_id] = collections.deque(maxlen=100)
 
         # Create run record in database
         with get_db(db_path) as conn:
@@ -273,9 +283,10 @@ class JobManager:
             Dict with job_id, status, progress_pct, current_step, message,
             and run_id. Returns None if job not found.
         """
-        if job_id in self._jobs:
-            return dict(self._jobs[job_id])
-        return None
+        with self._lock:
+            if job_id in self._jobs:
+                return dict(self._jobs[job_id])
+            return None
 
     def get_events(self, job_id: str) -> Generator[dict[str, Any], None, None]:
         """Yield SSE events from the job's event queue.
@@ -288,16 +299,37 @@ class JobManager:
         Yields:
             Dict with event data (type, data fields).
         """
-        queue = self._event_queues.get(job_id)
-        if queue is None:
-            return
+        with self._lock:
+            queue = self._event_queues.get(job_id)
+            if queue is None:
+                return
+            # Copy and drain events under the lock to avoid TOCTOU
+            events = list(queue)
+            queue.clear()
 
-        while queue:
-            try:
-                event = queue.popleft()
-                yield event
-            except IndexError:
-                break
+        for event in events:
+            yield event
+
+    def _cleanup_old_jobs(self, max_age_seconds: float = 3600.0) -> None:
+        """Remove jobs older than max_age_seconds from in-memory tracking.
+
+        Compares each job's ``created_at`` monotonic timestamp against the
+        current time and removes entries that exceed the threshold.
+
+        Args:
+            max_age_seconds: Maximum age in seconds before a job is removed.
+                Defaults to 3600 (1 hour).
+        """
+        now = time.monotonic()
+        with self._lock:
+            expired = [
+                jid
+                for jid, job in self._jobs.items()
+                if now - job.get("created_at", now) > max_age_seconds
+            ]
+            for jid in expired:
+                del self._jobs[jid]
+                self._event_queues.pop(jid, None)
 
     def _update_progress(
         self,
@@ -319,11 +351,12 @@ class JobManager:
             status: Job status string.
         """
         # Update in-memory state
-        if job_id in self._jobs:
-            self._jobs[job_id]["progress_pct"] = pct
-            self._jobs[job_id]["current_step"] = step
-            self._jobs[job_id]["message"] = message
-            self._jobs[job_id]["status"] = status
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id]["progress_pct"] = pct
+                self._jobs[job_id]["current_step"] = step
+                self._jobs[job_id]["message"] = message
+                self._jobs[job_id]["status"] = status
 
         # Update database
         with get_db(db_path) as conn:
@@ -350,8 +383,9 @@ class JobManager:
                 "status": status,
             },
         }
-        if job_id in self._event_queues:
-            self._event_queues[job_id].append(event)
+        with self._lock:
+            if job_id in self._event_queues:
+                self._event_queues[job_id].append(event)
 
     def _run_home_simulation(
         self,
@@ -441,21 +475,22 @@ class JobManager:
                 )
 
             # Update in-memory state
-            if job_id in self._jobs:
-                self._jobs[job_id]["status"] = "completed"
-                self._jobs[job_id]["progress_pct"] = 100.0
-                self._jobs[job_id]["current_step"] = "Done"
-                self._jobs[job_id]["message"] = "Simulation completed successfully"
+            with self._lock:
+                if job_id in self._jobs:
+                    self._jobs[job_id]["status"] = "completed"
+                    self._jobs[job_id]["progress_pct"] = 100.0
+                    self._jobs[job_id]["current_step"] = "Done"
+                    self._jobs[job_id]["message"] = "Simulation completed successfully"
 
-            # Append completion SSE event
-            if job_id in self._event_queues:
-                self._event_queues[job_id].append({
-                    "event": "complete",
-                    "data": {
-                        "status": "completed",
-                        "run_id": run_id,
-                    },
-                })
+                # Append completion SSE event
+                if job_id in self._event_queues:
+                    self._event_queues[job_id].append({
+                        "event": "complete",
+                        "data": {
+                            "status": "completed",
+                            "run_id": run_id,
+                        },
+                    })
 
         except Exception as exc:
             # Update job and run to failed
@@ -488,19 +523,20 @@ class JobManager:
                 )
 
             # Update in-memory state
-            if job_id in self._jobs:
-                self._jobs[job_id]["status"] = "failed"
-                self._jobs[job_id]["message"] = error_msg
+            with self._lock:
+                if job_id in self._jobs:
+                    self._jobs[job_id]["status"] = "failed"
+                    self._jobs[job_id]["message"] = error_msg
 
-            # Append failure SSE event
-            if job_id in self._event_queues:
-                self._event_queues[job_id].append({
-                    "event": "error",
-                    "data": {
-                        "status": "failed",
-                        "message": error_msg,
-                    },
-                })
+                # Append failure SSE event
+                if job_id in self._event_queues:
+                    self._event_queues[job_id].append({
+                        "event": "error",
+                        "data": {
+                            "status": "failed",
+                            "message": error_msg,
+                        },
+                    })
 
     def _run_fleet_simulation(
         self,
@@ -608,21 +644,22 @@ class JobManager:
                 )
 
             # Update in-memory state
-            if job_id in self._jobs:
-                self._jobs[job_id]["status"] = "completed"
-                self._jobs[job_id]["progress_pct"] = 100.0
-                self._jobs[job_id]["current_step"] = "Done"
-                self._jobs[job_id]["message"] = "Fleet simulation completed successfully"
+            with self._lock:
+                if job_id in self._jobs:
+                    self._jobs[job_id]["status"] = "completed"
+                    self._jobs[job_id]["progress_pct"] = 100.0
+                    self._jobs[job_id]["current_step"] = "Done"
+                    self._jobs[job_id]["message"] = "Fleet simulation completed successfully"
 
-            # Append completion SSE event
-            if job_id in self._event_queues:
-                self._event_queues[job_id].append({
-                    "event": "complete",
-                    "data": {
-                        "status": "completed",
-                        "run_id": run_id,
-                    },
-                })
+                # Append completion SSE event
+                if job_id in self._event_queues:
+                    self._event_queues[job_id].append({
+                        "event": "complete",
+                        "data": {
+                            "status": "completed",
+                            "run_id": run_id,
+                        },
+                    })
 
         except Exception as exc:
             error_tb = traceback.format_exc()
@@ -654,16 +691,17 @@ class JobManager:
                 )
 
             # Update in-memory state
-            if job_id in self._jobs:
-                self._jobs[job_id]["status"] = "failed"
-                self._jobs[job_id]["message"] = error_msg
+            with self._lock:
+                if job_id in self._jobs:
+                    self._jobs[job_id]["status"] = "failed"
+                    self._jobs[job_id]["message"] = error_msg
 
-            # Append failure SSE event
-            if job_id in self._event_queues:
-                self._event_queues[job_id].append({
-                    "event": "error",
-                    "data": {
-                        "status": "failed",
-                        "message": error_msg,
-                    },
-                })
+                # Append failure SSE event
+                if job_id in self._event_queues:
+                    self._event_queues[job_id].append({
+                        "event": "error",
+                        "data": {
+                            "status": "failed",
+                            "message": error_msg,
+                        },
+                    })

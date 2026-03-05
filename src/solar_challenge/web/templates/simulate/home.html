@@ -51,8 +51,19 @@ document.addEventListener('alpine:init', () => {
         timer: null,
         error: '',
         completedRunId: '',
+        evtSource: null,
         init() {
             this.fetchPresets();
+        },
+        destroy() {
+            if (this.evtSource) {
+                this.evtSource.close();
+                this.evtSource = null;
+            }
+            if (this.timer) {
+                clearInterval(this.timer);
+                this.timer = null;
+            }
         },
         async fetchPresets() {
             try {
@@ -128,9 +139,9 @@ document.addEventListener('alpine:init', () => {
                 this.elapsed = Math.floor((Date.now() - this.startTime) / 1000);
             }, 1000);
 
-            const evtSource = new EventSource('/api/jobs/' + this.jobId + '/progress');
+            this.evtSource = new EventSource('/api/jobs/' + this.jobId + '/progress');
 
-            evtSource.addEventListener('progress', (e) => {
+            this.evtSource.addEventListener('progress', (e) => {
                 try {
                     const data = JSON.parse(e.data);
                     if (data.progress_pct !== undefined) this.progress = data.progress_pct;
@@ -140,7 +151,7 @@ document.addEventListener('alpine:init', () => {
                 } catch(err) {}
             });
 
-            evtSource.addEventListener('complete', (e) => {
+            this.evtSource.addEventListener('complete', (e) => {
                 try {
                     const data = JSON.parse(e.data);
                     this.status = 'completed';
@@ -149,11 +160,12 @@ document.addEventListener('alpine:init', () => {
                     this.message = 'Simulation completed successfully';
                     if (data.run_id) this.completedRunId = data.run_id;
                 } catch(err) {}
-                evtSource.close();
+                this.evtSource.close();
+                this.evtSource = null;
                 if (this.timer) clearInterval(this.timer);
             });
 
-            evtSource.addEventListener('error', (e) => {
+            this.evtSource.addEventListener('error', (e) => {
                 try {
                     const data = JSON.parse(e.data);
                     this.status = 'failed';
@@ -165,7 +177,8 @@ document.addEventListener('alpine:init', () => {
                         this.error = 'Lost connection to server';
                     }
                 }
-                evtSource.close();
+                this.evtSource.close();
+                this.evtSource = null;
                 if (this.timer) clearInterval(this.timer);
             });
         },
@@ -190,7 +203,7 @@ document.addEventListener('alpine:init', () => {
 <div x-data="homeSimulator()">
     <!-- Tab navigation -->
     <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-t-lg">
-        <nav class="flex border-b border-slate-200 dark:border-slate-700 overflow-x-auto" aria-label="Configuration tabs">
+        <nav class="flex border-b border-slate-200 dark:border-slate-700 overflow-x-auto" aria-label="Configuration tabs" role="tablist">
             <template x-for="tab in tabs" :key="tab.id">
                 <button
                     type="button"

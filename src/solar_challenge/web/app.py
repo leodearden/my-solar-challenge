@@ -1,11 +1,14 @@
 """Flask application factory for the Solar Challenge web dashboard."""
 
+import logging
 import os
 from pathlib import Path
 
 from flask import Flask, render_template
 
-from solar_challenge.web.database import close_db, init_db
+from solar_challenge.web.database import init_db
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(test_config: dict | None = None) -> Flask:
@@ -57,23 +60,12 @@ def create_app(test_config: dict | None = None) -> Flask:
     db_path = app.config["DATABASE"]
     init_db(db_path)
 
-    # Register database cleanup on app context teardown
-    @app.teardown_appcontext
-    def teardown_db(exception: Exception | None = None) -> None:
-        """Close database connection on app context teardown.
-
-        Args:
-            exception: Exception that caused teardown, if any.
-        """
-        close_db(db_path)
-
     # Initialize JobManager for background simulation execution
     try:
         from solar_challenge.web.jobs import JobManager
         app.extensions["job_manager"] = JobManager()
-    except ImportError:
-        # jobs.py not yet implemented
-        pass
+    except ImportError as e:
+        logger.warning("JobManager not available: %s", e)
 
     # Register blueprints (deferred to allow routes to exist independently)
     _register_blueprints(app)
@@ -81,11 +73,11 @@ def create_app(test_config: dict | None = None) -> Flask:
     # Register custom error handlers
     @app.errorhandler(404)
     def page_not_found(e: Exception) -> tuple[str, int]:
-        return render_template("errors/404.html"), 404
+        return render_template("errors/404.html", page="error"), 404
 
     @app.errorhandler(500)
     def internal_server_error(e: Exception) -> tuple[str, int]:
-        return render_template("errors/500.html"), 500
+        return render_template("errors/500.html", page="error"), 500
 
     return app
 
@@ -106,41 +98,36 @@ def _register_blueprints(app: Flask) -> None:
     try:
         from solar_challenge.web.routes import bp
         app.register_blueprint(bp)
-    except ImportError:
-        # Routes not yet implemented - skip registration during setup phase
-        pass
+    except ImportError as e:
+        logger.warning("Routes blueprint not available: %s", e)
 
     # Register history blueprint
     try:
         from solar_challenge.web.history import bp as history_bp
         app.register_blueprint(history_bp, url_prefix="/history")
-    except ImportError:
-        # History blueprint not yet implemented
-        pass
+    except ImportError as e:
+        logger.warning("History blueprint not available: %s", e)
 
     # Register scenarios blueprint
     try:
         from solar_challenge.web.scenarios import bp as scenarios_bp
         app.register_blueprint(scenarios_bp, url_prefix="/scenarios")
-    except ImportError:
-        # Scenarios blueprint not yet implemented
-        pass
+    except ImportError as e:
+        logger.warning("Scenarios blueprint not available: %s", e)
 
     # Register API blueprint (background simulation endpoints)
     try:
         from solar_challenge.web.api import api_bp
         app.register_blueprint(api_bp)
-    except ImportError:
-        # API blueprint not yet implemented
-        pass
+    except ImportError as e:
+        logger.warning("API blueprint not available: %s", e)
 
     # Register assistant blueprint
     try:
         from solar_challenge.web.assistant import bp as assistant_bp
         app.register_blueprint(assistant_bp, url_prefix="/assistant")
-    except ImportError:
-        # Assistant blueprint not yet implemented
-        pass
+    except ImportError as e:
+        logger.warning("Assistant blueprint not available: %s", e)
 
 
 if __name__ == "__main__":

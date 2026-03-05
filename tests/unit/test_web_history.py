@@ -1,9 +1,12 @@
 """Tests for the run history browser and comparison features."""
 
+import io
 import json
 import tempfile
+import uuid
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from flask import Flask
@@ -477,3 +480,242 @@ class TestComparisonCharts:
         assert output and output != "{}"
         parsed = json.loads(output)
         assert "data" in parsed
+
+
+# ---------------------------------------------------------------------------
+# Fleet CSV export tests
+# ---------------------------------------------------------------------------
+
+
+def _make_sim_results(days: int = 1, gen_scale: float = 3.0, demand_val: float = 0.5) -> "SimulationResults":
+    """Create a minimal SimulationResults object for testing.
+
+    Args:
+        days: Number of simulation days.
+        gen_scale: Peak generation scale (kW).
+        demand_val: Flat demand value (kW).
+
+    Returns:
+        SimulationResults with simple but valid data.
+    """
+    from solar_challenge.home import SimulationResults
+
+    freq = "min"
+    index = pd.date_range("2024-06-01", periods=days * 1440, freq=freq, tz="Europe/London")
+
+    hours = np.arange(len(index)) / 60.0
+    generation = np.maximum(0, np.sin(hours * np.pi / 12) * gen_scale)
+    demand = np.full(len(index), demand_val)
+    self_consumption = np.minimum(generation, demand)
+    grid_import = np.maximum(0, demand - generation)
+    grid_export = np.maximum(0, generation - demand)
+    battery_charge = np.zeros(len(index))
+    battery_discharge = np.zeros(len(index))
+    battery_soc = np.zeros(len(index))
+
+    def _series(values: np.ndarray, name: str) -> pd.Series:
+        return pd.Series(values, index=index, name=name)
+
+    return SimulationResults(
+        generation=_series(generation, "generation_kw"),
+        demand=_series(demand, "demand_kw"),
+        self_consumption=_series(self_consumption, "self_consumption_kw"),
+        battery_charge=_series(battery_charge, "battery_charge_kw"),
+        battery_discharge=_series(battery_discharge, "battery_discharge_kw"),
+        battery_soc=_series(battery_soc, "battery_soc_kwh"),
+        grid_import=_series(grid_import, "grid_import_kw"),
+        grid_export=_series(grid_export, "grid_export_kw"),
+        import_cost=_series(np.zeros(len(index)), "import_cost_gbp"),
+        export_revenue=_series(np.zeros(len(index)), "export_revenue_gbp"),
+        tariff_rate=_series(np.zeros(len(index)), "tariff_rate_per_kwh"),
+        strategy_name="self_consumption",
+    )
+
+
+class TestFleetCSVExport:
+    """Tests for fleet CSV export containing aggregate data."""
+
+    def _save_fleet_run(self, app: Flask, run_id: str, n_homes: int = 3) -> None:
+        """Save a fleet run with multiple homes to storage for testing.
+
+        Each home gets different generation/demand to verify aggregation.
+        """
+        from solar_challenge.fleet import FleetResults, calculate_fleet_summary
+        from solar_challenge.home import HomeConfig, calculate_summary, SummaryStatistics
+        from solar_challenge.pv import PVConfig
+        from solar_challenge.load import LoadConfig
+
+        per_home_results = []
+        home_configs = []
+        per_home_summaries = []
+
+        for i in range(n_homes):
+            # Each home has different generation scale to make aggregation testable
+            gen_scale = 2.0 + i * 1.0  # 2.0, 3.0, 4.0
+            demand_val = 0.3 + i * 0.2  # 0.3, 0.5, 0.7
+
+            results = _make_sim_results(days=1, gen_scale=gen_scale, demand_val=demand_val)
+            per_home_results.append(results)
+
+            config = HomeConfig(
+                pv_config=PVConfig(capacity_kw=gen_scale),
+                load_config=LoadConfig(annual_consumption_kwh=3000 + i * 500),
+                name=f"Home {i + 1}",
+            )
+            home_configs.append(config)
+            per_home_summaries.append(calculate_summary(results))
+
+        fleet_results = FleetResults(
+            per_home_results=per_home_results,
+            home_configs=home_configs,
+        )
+        fleet_summary = calculate_fleet_summary(fleet_results)
+
+        with app.app_context():
+            storage = RunStorage(
+                db_path=app.config["DATABASE"],
+                data_dir=app.config["DATA_DIR"],
+            )
+            storage.save_fleet_run(
+                run_id=run_id,
+                fleet_results=fleet_results,
+                fleet_summary=fleet_summary,
+                per_home_summaries=per_home_summaries,
+                name="Test Fleet",
+            )
+
+    def test_fleet_csv_contains_aggregate_data(self, app: Flask, client: FlaskClient) -> None:
+        """Test that fleet CSV export contains aggregated data from all homes, not just the first."""
+        run_id = str(uuid.uuid4())
+        self._save_fleet_run(app, run_id, n_homes=3)
+
+        response = client.get(f"/history/api/runs/{run_id}/export/csv")
+        assert response.status_code == 200
+        assert "text/csv" in response.content_type
+
+        csv_text = response.data.decode("utf-8")
+
+        # Parse the CSV
+        df = pd.read_csv(io.StringIO(csv_text))
+
+        # The aggregate should have generation_kw column
+        assert "generation_kw" in df.columns
+        assert "demand_kw" in df.columns
+
+        # Aggregate generation should be the SUM of all homes.
+        # Each home has different gen_scale (2.0, 3.0, 4.0), so the aggregate
+        # maximum should be higher than any single home's max.
+        # A single home with gen_scale=4.0 would have max ~4.0 kW.
+        # The aggregate of 3 homes should have max ~(2+3+4) = ~9 kW.
+        max_gen = df["generation_kw"].max()
+        assert max_gen > 5.0, (
+            f"Aggregate generation max {max_gen} is too low; "
+            "CSV may contain only first home, not the aggregate"
+        )
+
+    def test_fleet_csv_has_expected_columns(self, app: Flask, client: FlaskClient) -> None:
+        """Test fleet CSV export has the expected aggregate columns."""
+        run_id = str(uuid.uuid4())
+        self._save_fleet_run(app, run_id, n_homes=2)
+
+        response = client.get(f"/history/api/runs/{run_id}/export/csv")
+        assert response.status_code == 200
+
+        csv_text = response.data.decode("utf-8")
+        df = pd.read_csv(io.StringIO(csv_text))
+
+        expected_cols = {"generation_kw", "demand_kw", "self_consumption_kw",
+                         "grid_import_kw", "grid_export_kw"}
+        assert expected_cols.issubset(set(df.columns))
+
+
+class TestContentDispositionHeader:
+    """Tests for Content-Disposition header quoting in export endpoints."""
+
+    def test_csv_content_disposition_has_quoted_filename(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Test CSV export Content-Disposition header has quotes around the filename."""
+        run_id = str(uuid.uuid4())
+
+        # Save a simple home run for export
+        from solar_challenge.home import HomeConfig, calculate_summary
+        from solar_challenge.pv import PVConfig
+        from solar_challenge.load import LoadConfig
+
+        config = HomeConfig(
+            pv_config=PVConfig(capacity_kw=4.0),
+            load_config=LoadConfig(annual_consumption_kwh=3500),
+            name="Quote Test",
+        )
+        results = _make_sim_results(days=1)
+        summary = calculate_summary(results)
+
+        with app.app_context():
+            storage = RunStorage(
+                db_path=app.config["DATABASE"],
+                data_dir=app.config["DATA_DIR"],
+            )
+            storage.save_home_run(
+                run_id=run_id,
+                config=config,
+                results=results,
+                summary=summary,
+                name="Quote Test",
+            )
+
+        response = client.get(f"/history/api/runs/{run_id}/export/csv")
+        assert response.status_code == 200
+
+        cd = response.headers.get("Content-Disposition", "")
+        assert "attachment" in cd
+        # The filename should be quoted: filename="something.csv"
+        assert 'filename="' in cd, (
+            f"Content-Disposition filename is not properly quoted: {cd}"
+        )
+
+    def test_yaml_content_disposition_has_quoted_filename(
+        self, app: Flask, client: FlaskClient
+    ) -> None:
+        """Test YAML export Content-Disposition header has quotes around the filename."""
+        run_id = str(uuid.uuid4())
+        _insert_test_run(app, run_id=run_id, name="YAML Quote Test")
+
+        response = client.get(f"/history/api/runs/{run_id}/export/yaml")
+        assert response.status_code == 200
+
+        cd = response.headers.get("Content-Disposition", "")
+        assert "attachment" in cd
+        assert 'filename="' in cd, (
+            f"Content-Disposition filename is not properly quoted: {cd}"
+        )
+
+
+class TestCompareWithoutIDs:
+    """Tests for /history/compare redirect behavior without proper IDs."""
+
+    def test_compare_without_ids_redirects_to_runs(self, client: FlaskClient) -> None:
+        """Test GET /history/compare without IDs returns a redirect (not raw 400)."""
+        response = client.get("/history/compare")
+        # Should redirect, not return a raw 400 error
+        assert response.status_code == 302
+        assert response.status_code != 400
+
+    def test_compare_without_ids_redirect_targets_runs_page(
+        self, client: FlaskClient
+    ) -> None:
+        """Test that /history/compare redirect location points to the runs page."""
+        response = client.get("/history/compare")
+        assert response.status_code == 302
+        location = response.headers.get("Location", "")
+        assert "/history/runs" in location
+
+    def test_compare_without_ids_follow_redirect_shows_flash(
+        self, client: FlaskClient
+    ) -> None:
+        """Test that following the redirect shows a friendly flash message."""
+        response = client.get("/history/compare", follow_redirects=True)
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+        # The flash message should inform user about selecting runs
+        assert "No run IDs provided" in html or "Select" in html or "runs" in html.lower()

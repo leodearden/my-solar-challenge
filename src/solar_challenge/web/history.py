@@ -6,7 +6,10 @@ data export.
 """
 
 import json
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from flask import (
     Blueprint,
@@ -121,7 +124,7 @@ def compare_page() -> str | Response:
         charts["bar"] = comparison_bar_chart(summaries, labels)
         charts["radar"] = comparison_radar(summaries, labels)
     except Exception:
-        pass
+        logger.warning("Failed to generate comparison charts", exc_info=True)
 
     return str(render_template(
         "history/compare.html",
@@ -387,12 +390,10 @@ def api_export_csv(run_id: str) -> Response | tuple[Response, int]:
             _config, results, _summary = storage.load_home_run(run_id)
             df = results.to_dataframe()
         else:
-            # For fleet runs, export the aggregate
+            # For fleet runs, export the aggregate (sum across all homes)
             fleet_results, _fleet_summary, _per_home = storage.load_fleet_run(run_id)
-            # Export first home as representative; full fleet export would need
-            # more complex handling
             if fleet_results.per_home_results:
-                df = fleet_results.per_home_results[0].to_dataframe()
+                df = fleet_results.to_aggregate_dataframe()
             else:
                 return jsonify({"error": "No data to export"}), 404
     except FileNotFoundError:
@@ -405,7 +406,7 @@ def api_export_csv(run_id: str) -> Response | tuple[Response, int]:
     return Response(
         csv_data,
         mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -453,5 +454,5 @@ def api_export_yaml(run_id: str) -> Response | tuple[Response, int]:
     return Response(
         yaml_data,
         mimetype="text/yaml",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

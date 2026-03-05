@@ -10,10 +10,6 @@ from pathlib import Path
 from typing import Generator
 
 
-# Global connection cache to support Flask's application context pattern
-_connections: dict[str, sqlite3.Connection] = {}
-
-
 def init_db(db_path: str | Path) -> None:
     """Initialize the SQLite database with the required schema.
 
@@ -143,18 +139,3 @@ def get_db(db_path: str | Path) -> Generator[sqlite3.Connection, None, None]:
         raise
     finally:
         conn.close()
-
-
-def close_db(db_path: str | Path) -> None:
-    """Close a cached database connection.
-
-    Used for cleanup in Flask's teardown_appcontext. Only closes
-    the connection if it exists in the global cache.
-
-    Args:
-        db_path: Path to the SQLite database file.
-    """
-    db_path_str = str(Path(db_path))
-    if db_path_str in _connections:
-        _connections[db_path_str].close()
-        del _connections[db_path_str]

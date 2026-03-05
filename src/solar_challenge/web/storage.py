@@ -265,7 +265,7 @@ class RunStorage:
                     status,
                     error_message,
                     created_at,
-                    created_at if status == "completed" else None,
+                    datetime.now(timezone.utc).isoformat() if status == "completed" else None,
                     duration_seconds,
                     1,  # n_homes for a single home run
                     None,  # notes field, can be added later
@@ -332,6 +332,7 @@ class RunStorage:
             export_revenue=df["export_revenue_gbp"],
             tariff_rate=df["tariff_rate_per_kwh"],
             strategy_name=summary.strategy_name,  # Get from summary
+            heat_pump_load=df["heat_pump_load_kw"] if "heat_pump_load_kw" in df.columns else None,
         )
 
         return config, results, summary
@@ -423,7 +424,7 @@ class RunStorage:
                     status,
                     error_message,
                     created_at,
-                    created_at if status == "completed" else None,
+                    datetime.now(timezone.utc).isoformat() if status == "completed" else None,
                     duration_seconds,
                     len(fleet_results.home_configs),
                     None,
@@ -513,6 +514,7 @@ class RunStorage:
                 export_revenue=df["export_revenue_gbp"],
                 tariff_rate=df["tariff_rate_per_kwh"],
                 strategy_name=home_summary.strategy_name,
+                heat_pump_load=df["heat_pump_load_kw"] if "heat_pump_load_kw" in df.columns else None,
             )
             per_home_results.append(result)
 
@@ -568,6 +570,8 @@ class RunStorage:
                 params.append(limit)
 
             if offset > 0:
+                if limit is None:
+                    query += " LIMIT -1"
                 query += " OFFSET ?"
                 params.append(offset)
 

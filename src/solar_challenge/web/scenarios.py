@@ -6,6 +6,7 @@ scenario presets.
 """
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,6 +14,8 @@ from typing import Any
 
 import yaml
 from flask import Blueprint, Response, current_app, jsonify, render_template, request
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint("scenarios", __name__)
 
@@ -308,7 +311,7 @@ def list_presets() -> tuple[Response, int]:
                     "created_at": row["created_at"],
                 })
     except Exception:  # noqa: BLE001
-        pass
+        logger.warning("Failed to load saved scenario presets", exc_info=True)
 
     return jsonify({"presets": presets}), 200
 
@@ -361,6 +364,6 @@ def get_preset(name: str) -> tuple[Response, int]:
                 "created_at": row["created_at"],
             }), 200
     except Exception:  # noqa: BLE001
-        pass
+        logger.warning("Failed to load preset '%s' from database", name, exc_info=True)
 
     return jsonify({"error": f"Preset '{name}' not found"}), 404

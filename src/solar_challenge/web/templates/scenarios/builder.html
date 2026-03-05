@@ -3,6 +3,11 @@
 
 {% block title %}Scenario Builder{% endblock %}
 
+{% block head %}
+<!-- js-yaml for client-side YAML parsing (used by Upload YAML feature) -->
+<script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+{% endblock %}
+
 {% block content %}
 
 {{ page_header(
@@ -151,7 +156,7 @@
             this.yamlPreview = text;
             // Try to parse and populate form
             try {
-                const parsed = jsyaml ? jsyaml.load(text) : null;
+                const parsed = (typeof jsyaml !== 'undefined') ? jsyaml.load(text) : null;
                 // Basic population from parsed YAML
                 if (parsed && parsed.name) this.name = parsed.name;
             } catch (e) { /* ignore parse errors */ }

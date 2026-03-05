@@ -1,5 +1,7 @@
 """Tests for the Flask web dashboard module."""
 
+from pathlib import Path
+
 import pytest
 import pandas as pd
 from flask import Flask
@@ -9,13 +11,16 @@ from solar_challenge.web.app import create_app
 
 
 @pytest.fixture
-def app() -> Flask:
+def app(tmp_path: Path) -> Flask:
     """Create a test Flask application."""
+    db_path = tmp_path / "test.db"
     test_app = create_app(
         test_config={
             "TESTING": True,
             "SECRET_KEY": "test-secret-key",
             "WTF_CSRF_ENABLED": False,
+            "DATABASE": str(db_path),
+            "DATA_DIR": str(tmp_path),
         }
     )
     return test_app
@@ -636,3 +641,119 @@ fleet_distribution:
             content_type="text/yaml",
         )
         assert response.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Error page tests
+# ---------------------------------------------------------------------------
+
+
+class TestErrorPages:
+    """Tests for custom 404 and 500 error pages."""
+
+    def test_nonexistent_route_returns_404(self, client: FlaskClient) -> None:
+        """Test GET /nonexistent returns 404 status code."""
+        response = client.get("/nonexistent")
+        assert response.status_code == 404
+
+    def test_nonexistent_route_returns_html_template(self, client: FlaskClient) -> None:
+        """Test GET /nonexistent returns a rendered 404 template, not a raw error."""
+        response = client.get("/nonexistent")
+        assert response.status_code == 404
+        assert "text/html" in response.content_type
+        html = response.data.decode("utf-8")
+        # Should contain the custom 404 template content
+        assert "Page Not Found" in html
+        # Should NOT be a raw error string like "Not Found"
+        assert "<!DOCTYPE html>" in html or "<html" in html
+
+    def test_404_page_renders_within_app_layout(self, client: FlaskClient) -> None:
+        """Test custom 404 page is rendered within the base app layout."""
+        response = client.get("/nonexistent")
+        assert response.status_code == 404
+        html = response.data.decode("utf-8")
+        # The base template includes sidebar navigation and footer
+        assert "Solar Challenge" in html
+        # Check it extends the base layout (has nav and footer elements)
+        assert "<nav" in html or "nav-sidebar" in html.lower() or "sidebar" in html.lower()
+        assert "<footer" in html
+        # Contains the 404-specific content
+        assert "404" in html
+        assert "Back to Dashboard" in html
+
+    def test_500_page_renders_within_app_layout(self, app: Flask) -> None:
+        """Test custom 500 page is rendered within the base app layout."""
+        # Register a route that always raises an exception
+        @app.route("/trigger-500")
+        def trigger_500() -> str:
+            raise RuntimeError("Deliberate test error")
+
+        # Temporarily disable TESTING exception propagation so the
+        # 500 error handler fires and renders the template.
+        app.config["TESTING"] = False
+        try:
+            with app.test_client() as test_client:
+                response = test_client.get("/trigger-500")
+                assert response.status_code == 500
+                html = response.data.decode("utf-8")
+                # Should render within the base layout
+                assert "Solar Challenge" in html
+                assert "<footer" in html
+                # Contains the 500-specific content
+                assert "500" in html
+                assert "Internal Server Error" in html or "Server Error" in html
+                assert "Back to Dashboard" in html
+        finally:
+            app.config["TESTING"] = True
+
+
+class TestSimulateHomePageRendering:
+    """Tests for the /simulate/home page rendering quality."""
+
+    def test_simulate_home_no_raw_js_in_body(self, client: FlaskClient) -> None:
+        """Test /simulate/home does not expose raw JavaScript in the page body.
+
+        JavaScript should be contained within <script> tags, not visible
+        as text content in the rendered HTML body.
+        """
+        response = client.get("/simulate/home")
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+
+        # The page uses Alpine.js. Check that raw JS function bodies are not
+        # leaked outside of <script> tags. We do this by checking that certain
+        # JS-only patterns don't appear outside <script> blocks.
+
+        # Remove all script blocks first, then check remaining HTML body
+        import re
+        # Remove all script tag contents
+        body_without_scripts = re.sub(
+            r"<script[^>]*>.*?</script>",
+            "",
+            html,
+            flags=re.DOTALL,
+        )
+
+        # These are JS-specific patterns that should NOT appear in visible body text
+        assert "function()" not in body_without_scripts, (
+            "Raw 'function()' found outside <script> tags"
+        )
+        assert "async () =>" not in body_without_scripts, (
+            "Raw arrow function found outside <script> tags"
+        )
+        assert "addEventListener" not in body_without_scripts, (
+            "Raw 'addEventListener' found outside <script> tags"
+        )
+
+    def test_simulate_home_has_proper_html_structure(self, client: FlaskClient) -> None:
+        """Test /simulate/home has proper HTML document structure."""
+        response = client.get("/simulate/home")
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+
+        # Should have a proper HTML document
+        assert "<!DOCTYPE html>" in html or "<html" in html
+        assert "<head>" in html or "<head " in html
+        assert "</head>" in html
+        assert "<body" in html
+        assert "</body>" in html

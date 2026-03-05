@@ -13,7 +13,7 @@ from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistic
 from solar_challenge.load import LoadConfig
 from solar_challenge.location import Location
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.database import close_db, get_db, init_db
+from solar_challenge.web.database import get_db, init_db
 from solar_challenge.web.storage import RunStorage
 
 
@@ -230,14 +230,6 @@ class TestDatabaseConnectionManagement:
             cursor = conn.cursor()
             cursor.execute("SELECT id FROM runs WHERE id = ?", ("test-id",))
             assert cursor.fetchone() is None
-
-    def test_close_db_closes_connection(self, db_path):
-        """Test close_db closes cached connection."""
-        # Note: close_db is designed for Flask's teardown_appcontext
-        # and uses a global _connections cache. For this test,
-        # we just verify it doesn't raise an error
-        close_db(db_path)  # Should not raise even if connection doesn't exist
-
 
 class TestHomeRunRoundTrip:
     """Tests for home run save/load round-trip."""

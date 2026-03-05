@@ -19,6 +19,18 @@
         runId: null,
         errorMsg: '',
 
+        /* ---- Progress tracking state ---- */
+        progress: 0,
+        step: 'Queued',
+        message: 'Waiting to start...',
+        status: 'idle',
+        elapsed: 0,
+        startTime: null,
+        timer: null,
+        evtSource: null,
+        error: '',
+        completedRunId: '',
+
         /* ---- PV distribution state ---- */
         pvDist: {
             type: 'shuffled_pool',
@@ -154,6 +166,10 @@
             this.errorMsg = '';
             this.jobId = null;
             this.runId = null;
+            this.status = 'idle';
+            this.progress = 0;
+            this.error = '';
+            this.completedRunId = '';
             try {
                 const resp = await fetch('/api/simulate/fleet-from-distribution', {
                     method: 'POST',
@@ -164,6 +180,7 @@
                 if (resp.ok) {
                     this.jobId = data.job_id;
                     this.runId = data.run_id;
+                    this.startProgressTracking();
                 } else {
                     this.errorMsg = data.error || 'Submission failed';
                 }
@@ -172,6 +189,80 @@
             } finally {
                 this.submitting = false;
             }
+        },
+
+        /* ---- SSE Progress tracking ---- */
+        startProgressTracking() {
+            this.status = 'queued';
+            this.step = 'Queued';
+            this.message = 'Waiting to start...';
+            this.startTime = Date.now();
+            this.timer = setInterval(() => {
+                this.elapsed = Math.floor((Date.now() - this.startTime) / 1000);
+            }, 1000);
+
+            this.evtSource = new EventSource('/api/jobs/' + this.jobId + '/progress');
+
+            this.evtSource.addEventListener('progress', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data.progress !== undefined) this.progress = data.progress * 100;
+                    if (data.progress_pct !== undefined) this.progress = data.progress_pct;
+                    if (data.current_step) this.step = data.current_step;
+                    if (data.message) this.message = data.message;
+                    if (data.homes_completed !== undefined && data.total_homes) {
+                        this.message = 'Processing home ' + data.homes_completed + '/' + data.total_homes;
+                    }
+                    if (data.status) this.status = data.status;
+                } catch(err) {}
+            });
+
+            this.evtSource.addEventListener('complete', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    this.status = 'completed';
+                    this.progress = 100;
+                    this.step = 'Done';
+                    this.message = data.message || 'Fleet simulation completed successfully';
+                    if (data.run_id) this.completedRunId = data.run_id;
+                } catch(err) {}
+                this.stopProgressTracking();
+            });
+
+            this.evtSource.addEventListener('error', (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    this.status = 'failed';
+                    this.error = data.message || data.error || 'An unexpected error occurred';
+                } catch(err) {
+                    if (this.status !== 'completed') {
+                        this.status = 'failed';
+                        this.error = 'Lost connection to server';
+                    }
+                }
+                this.stopProgressTracking();
+            });
+        },
+
+        stopProgressTracking() {
+            if (this.evtSource) {
+                this.evtSource.close();
+                this.evtSource = null;
+            }
+            if (this.timer) {
+                clearInterval(this.timer);
+                this.timer = null;
+            }
+        },
+
+        destroy() {
+            this.stopProgressTracking();
+        },
+
+        formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = seconds % 60;
+            return m > 0 ? m + 'm ' + s + 's' : s + 's';
         },
 
         /* ---- YAML Export ---- */
@@ -461,79 +552,49 @@
     </template>
 
     <!-- Results section: progress tracker appears after submission -->
-    <div id="results-section">
+    <div id="results-section" class="mt-6">
         <template x-if="jobId">
-            <div
-                hx-ext="sse"
-                :sse-connect="'/api/jobs/' + jobId + '/progress'"
-                x-data="{
-                    progress: 0,
-                    step: 'Queued',
-                    message: 'Waiting to start...',
-                    status: 'queued',
-                    elapsed: 0,
-                    startTime: Date.now(),
-                    timer: null,
-                    error: '',
-                    completedRunId: '',
-                    init() {
-                        this.timer = setInterval(() => {
-                            this.elapsed = Math.floor((Date.now() - this.startTime) / 1000);
-                        }, 1000);
-                    },
-                    destroy() {
-                        if (this.timer) clearInterval(this.timer);
-                    },
-                    formatTime(seconds) {
-                        const m = Math.floor(seconds / 60);
-                        const s = seconds % 60;
-                        return m > 0 ? m + 'm ' + s + 's' : s + 's';
-                    }
-                }"
-                x-init="init()"
-            >
-                <div class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6">
-                    <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Fleet Simulation Progress</h3>
-                        <span class="text-sm font-mono text-slate-500 dark:text-slate-400" x-text="formatTime(elapsed)"></span>
-                    </div>
-
-                    <!-- Progress bar -->
-                    <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-4 mb-3 overflow-hidden">
-                        <div
-                            class="h-full rounded-full transition-all duration-500 ease-out"
-                            :class="status === 'completed' ? 'bg-green-500' : 'bg-amber-500'"
-                            :style="'width: ' + Math.min(progress, 100) + '%'"
-                        ></div>
-                    </div>
-
-                    <div class="flex items-center justify-between text-sm">
-                        <span class="text-slate-600 dark:text-slate-300" x-text="step"></span>
-                        <span class="font-mono text-slate-500 dark:text-slate-400" x-text="Math.round(progress) + '%'"></span>
-                    </div>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400" x-text="message"></p>
-
-                    <!-- Completed state -->
-                    <template x-if="status === 'completed'">
-                        <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
-                            <p class="text-green-600 dark:text-green-400 font-medium mb-3">Fleet simulation completed successfully!</p>
-                            <a
-                                :href="'/results?run_id=' + completedRunId"
-                                class="inline-flex items-center px-4 py-2 rounded-lg bg-amber-500 text-white font-medium hover:bg-amber-600 transition-colors"
-                            >View Results</a>
-                        </div>
-                    </template>
-
-                    <!-- Failed state -->
-                    <template x-if="status === 'failed'">
-                        <div class="mt-4">
-                            <div class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
-                                <p class="text-red-700 dark:text-red-400 font-medium mb-1">Simulation Failed</p>
-                                <p class="text-red-600 dark:text-red-300 text-sm" x-text="error"></p>
-                            </div>
-                        </div>
-                    </template>
+            <div class="bg-white dark:bg-slate-800 rounded-lg shadow-sm border border-slate-200 dark:border-slate-700 p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Fleet Simulation Progress</h3>
+                    <span class="text-sm font-mono text-slate-500 dark:text-slate-400" x-text="formatTime(elapsed)"></span>
                 </div>
+
+                <!-- Progress bar -->
+                <div class="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-4 mb-3 overflow-hidden">
+                    <div
+                        class="h-full rounded-full transition-all duration-500 ease-out"
+                        :class="status === 'completed' ? 'bg-green-500' : 'bg-amber-500'"
+                        :style="'width: ' + Math.min(progress, 100) + '%'"
+                    ></div>
+                </div>
+
+                <div class="flex items-center justify-between text-sm">
+                    <span class="text-slate-600 dark:text-slate-300" x-text="step"></span>
+                    <span class="font-mono text-slate-500 dark:text-slate-400" x-text="Math.round(progress) + '%'"></span>
+                </div>
+                <p class="mt-2 text-sm text-slate-500 dark:text-slate-400" x-text="message"></p>
+
+                <!-- Completed state -->
+                <template x-if="status === 'completed'">
+                    <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+                        <p class="text-green-600 dark:text-green-400 font-medium mb-3">Fleet simulation completed successfully!</p>
+                        <a
+                            :href="'/results?run_id=' + completedRunId"
+                            class="inline-flex items-center px-4 py-2 rounded-lg bg-amber-500 text-white font-medium hover:bg-amber-600 transition-colors"
+                        >View Results</a>
+                    </div>
+                </template>
+
+                <!-- Failed state -->
+                <template x-if="status === 'failed'">
+                    <div class="mt-4">
+                        <div class="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                            <p class="text-red-700 dark:text-red-400 font-medium mb-1">Simulation Failed</p>
+                            <p class="text-red-600 dark:text-red-300 text-sm" x-text="error"></p>
+                        </div>
+                    </div>
+                </template>
             </div>
         </template>
     </div>

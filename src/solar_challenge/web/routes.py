@@ -118,6 +118,7 @@ def index() -> str:
     runs = []
     for run in runs_raw:
         runs.append({
+            "id": run.get("id", ""),
             "name": run.get("name", "Unnamed"),
             "type": run.get("type", "home"),
             "date": (run.get("created_at", "")[:10] if run.get("created_at") else ""),
