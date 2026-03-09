@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /* ===== Solar Challenge Dashboard — Tailwind Companion CSS ===== */
 /* Only CSS variables, Tailwind overrides, energy colour palette,
    HTMX integration classes, chart container sizing, and spinner animation.
