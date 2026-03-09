@@ -42,7 +42,7 @@
 </div>
 
 <!-- Normal distribution inputs -->
-<div x-show="dist.type === 'normal'" x-transition class="space-y-4">
+<div x-show="dist.type === 'normal'" x-cloak x-transition class="space-y-4">
     <div class="grid grid-cols-2 gap-4">
         <div class="space-y-1.5">
             <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Mean</label>
@@ -70,7 +70,7 @@
 </div>
 
 <!-- Uniform distribution inputs -->
-<div x-show="dist.type === 'uniform'" x-transition class="space-y-4">
+<div x-show="dist.type === 'uniform'" x-cloak x-transition class="space-y-4">
     <div class="grid grid-cols-2 gap-4">
         <div class="space-y-1.5">
             <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Min</label>
@@ -86,7 +86,7 @@
 </div>
 
 <!-- Weighted discrete distribution inputs -->
-<div x-show="dist.type === 'weighted_discrete'" x-transition class="space-y-3">
+<div x-show="dist.type === 'weighted_discrete'" x-cloak x-transition class="space-y-3">
     <div class="text-sm text-slate-500 dark:text-slate-400 mb-2">Define value-weight pairs. Weights are auto-normalised.</div>
     <template x-for="(row, idx) in dist.values" :key="idx">
         <div class="flex items-center gap-3">
@@ -122,7 +122,7 @@
 </div>
 
 <!-- Shuffled pool distribution inputs -->
-<div x-show="dist.type === 'shuffled_pool'" x-transition class="space-y-3">
+<div x-show="dist.type === 'shuffled_pool'" x-cloak x-transition class="space-y-3">
     <div class="text-sm text-slate-500 dark:text-slate-400 mb-2">Define exact value-count pairs. Counts should sum to the fleet size.</div>
     <template x-for="(row, idx) in dist.entries" :key="idx">
         <div class="flex items-center gap-3">

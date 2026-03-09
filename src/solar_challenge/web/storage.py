@@ -17,18 +17,12 @@ import shutil
 from dataclasses import asdict, fields, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Type, TypeVar
+from typing import Any, Type, TypeVar, Union, get_type_hints
 
 import pandas as pd
 
-from solar_challenge.battery import BatteryConfig
-from solar_challenge.config import DispatchStrategyConfig
 from solar_challenge.fleet import FleetResults, FleetSummary
 from solar_challenge.home import HomeConfig, SimulationResults, SummaryStatistics
-from solar_challenge.load import LoadConfig
-from solar_challenge.location import Location
-from solar_challenge.pv import PVConfig
-from solar_challenge.tariff import TariffConfig, TariffPeriod
 from solar_challenge.web.database import get_db
 
 T = TypeVar("T")
@@ -95,10 +89,17 @@ def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
     if not is_dataclass(cls):
         raise TypeError(f"Expected dataclass type, got {cls}")
 
-    # Map of nested dataclass fields to their types
-    field_types: dict[str, Type[Any]] = {}
-    for field_info in fields(cls):
-        field_types[field_info.name] = field_info.type
+    # Use get_type_hints() to resolve string annotations to real types.
+    # Pass the defining module's globals so forward references resolve correctly.
+    import sys
+
+    cls_module = sys.modules.get(cls.__module__, None)
+    cls_globals = getattr(cls_module, "__dict__", None)
+    try:
+        resolved_hints = get_type_hints(cls, globalns=cls_globals)
+    except NameError:
+        # Fall back to field annotations if forward references can't resolve
+        resolved_hints = {f.name: f.type for f in fields(cls)}
 
     kwargs: dict[str, Any] = {}
     for field_name, value in data.items():
@@ -106,58 +107,46 @@ def _deserialize_dataclass(cls: Type[T], data: dict[str, Any]) -> T:
             kwargs[field_name] = None
             continue
 
-        field_type = field_types.get(field_name)
+        field_type = resolved_hints.get(field_name)
         if field_type is None:
             # Field not in dataclass definition, skip
             continue
 
-        # Handle Optional[T] types (unwrap)
+        # Handle Optional[T] / Union types (unwrap to inner type)
         origin = getattr(field_type, "__origin__", None)
         if origin is Union:
-            # Get non-None type from Optional
+            # Get non-None type from Optional[T]
             args = getattr(field_type, "__args__", ())
             field_type = next((arg for arg in args if arg is not type(None)), field_type)
 
-        # Handle nested dataclasses by type name matching
+        # Handle nested dataclasses (dict -> dataclass)
         if isinstance(value, dict):
-            # Check if this field should be a known dataclass
-            if field_type == Location or (isinstance(field_type, type) and field_type.__name__ == "Location"):
-                kwargs[field_name] = _deserialize_dataclass(Location, value)
-            elif field_type == PVConfig or (isinstance(field_type, type) and field_type.__name__ == "PVConfig"):
-                kwargs[field_name] = _deserialize_dataclass(PVConfig, value)
-            elif field_type == LoadConfig or (isinstance(field_type, type) and field_type.__name__ == "LoadConfig"):
-                kwargs[field_name] = _deserialize_dataclass(LoadConfig, value)
-            elif field_type == BatteryConfig or (isinstance(field_type, type) and field_type.__name__ == "BatteryConfig"):
-                kwargs[field_name] = _deserialize_dataclass(BatteryConfig, value)
-            elif field_type == TariffConfig or (isinstance(field_type, type) and field_type.__name__ == "TariffConfig"):
-                kwargs[field_name] = _deserialize_dataclass(TariffConfig, value)
-            elif field_type == TariffPeriod or (isinstance(field_type, type) and field_type.__name__ == "TariffPeriod"):
-                kwargs[field_name] = _deserialize_dataclass(TariffPeriod, value)
-            elif field_type == DispatchStrategyConfig or (isinstance(field_type, type) and field_type.__name__ == "DispatchStrategyConfig"):
-                kwargs[field_name] = _deserialize_dataclass(DispatchStrategyConfig, value)
-            elif is_dataclass(field_type):
-                # Generic nested dataclass
+            if isinstance(field_type, type) and is_dataclass(field_type):
                 kwargs[field_name] = _deserialize_dataclass(field_type, value)
             else:
                 kwargs[field_name] = value
-        # Handle lists (may contain dataclasses or TariffPeriods)
+        # Handle lists (may contain nested dataclasses)
         elif isinstance(value, list):
-            # Special case for TariffConfig.periods
-            if field_name == "periods" and len(value) > 0 and isinstance(value[0], dict):
-                kwargs[field_name] = [_deserialize_dataclass(TariffPeriod, item) for item in value]
+            list_origin = getattr(field_type, "__origin__", None)
+            if list_origin in (list, tuple) and len(value) > 0 and isinstance(value[0], dict):
+                list_args = getattr(field_type, "__args__", ())
+                if list_args:
+                    inner_type = list_args[0]
+                    if isinstance(inner_type, type) and is_dataclass(inner_type):
+                        kwargs[field_name] = [_deserialize_dataclass(inner_type, item) for item in value]
+                    else:
+                        kwargs[field_name] = value
+                else:
+                    kwargs[field_name] = value
             else:
                 kwargs[field_name] = value
         # Handle pd.Timestamp strings
-        elif isinstance(value, str) and field_name in ("start_date", "end_date"):
+        elif isinstance(value, str) and isinstance(field_type, type) and issubclass(field_type, pd.Timestamp):
             kwargs[field_name] = pd.Timestamp(value)
         else:
             kwargs[field_name] = value
 
     return cls(**kwargs)
-
-
-# Type alias for Union (used in Optional type checking)
-from typing import Union
 
 
 class RunStorage:

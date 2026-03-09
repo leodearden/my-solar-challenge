@@ -1,0 +1,81 @@
+{#
+    icons.html — SVG icon macros for the Solar Challenge UI.
+
+    Each macro renders an inline SVG element with a configurable `classes` parameter.
+
+    Usage:
+        {% from "components/icons.html" import dashboard, simulate, scenarios, history, chevron_right, close, sidebar_collapse, brand_sun %}
+#}
+
+
+{# Dashboard — house icon (Heroicons mini home) #}
+{% macro dashboard(classes="h-5 w-5") %}
+<svg xmlns="http://www.w3.org/2000/svg" class="{{ classes }}" viewBox="0 0 20 20" fill="currentColor">
+    <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
+</svg>
+{% endmacro %}
+
+
+{# Simulate — lightning bolt icon (Heroicons mini bolt) #}
+{% macro simulate(classes="h-5 w-5") %}
+<svg xmlns="http://www.w3.org/2000/svg" class="{{ classes }}" viewBox="0 0 20 20" fill="currentColor">
+    <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd" />
+</svg>
+{% endmacro %}
+
+
+{# Scenarios — clipboard/document icon (Heroicons mini clipboard-document-list) #}
+{% macro scenarios(classes="h-5 w-5") %}
+<svg xmlns="http://www.w3.org/2000/svg" class="{{ classes }}" viewBox="0 0 20 20" fill="currentColor">
+    <path d="M9 2a1 1 0 000 2h2a1 1 0 100-2H9z" />
+    <path fill-rule="evenodd" d="M4 5a2 2 0 012-2 3 3 0 003 3h2a3 3 0 003-3 2 2 0 012 2v11a2 2 0 01-2 2H6a2 2 0 01-2-2V5zm3 4a1 1 0 000 2h.01a1 1 0 100-2H7zm3 0a1 1 0 000 2h3a1 1 0 100-2h-3zm-3 4a1 1 0 100 2h.01a1 1 0 100-2H7zm3 0a1 1 0 100 2h3a1 1 0 100-2h-3z" clip-rule="evenodd" />
+</svg>
+{% endmacro %}
+
+
+{# History — clock icon (Heroicons mini clock) #}
+{% macro history(classes="h-5 w-5") %}
+<svg xmlns="http://www.w3.org/2000/svg" class="{{ classes }}" viewBox="0 0 20 20" fill="currentColor">
+    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clip-rule="evenodd" />
+</svg>
+{% endmacro %}
+
+
+{# Chevron right — for expandable group indicators #}
+{% macro chevron_right(classes="h-4 w-4") %}
+<svg xmlns="http://www.w3.org/2000/svg" class="{{ classes }}" viewBox="0 0 20 20" fill="currentColor">
+    <path fill-rule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+</svg>
+{% endmacro %}
+
+
+{# Close — X icon for mobile menu close button #}
+{% macro close(classes="h-5 w-5") %}
+<svg xmlns="http://www.w3.org/2000/svg" class="{{ classes }}" viewBox="0 0 20 20" fill="currentColor">
+    <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+</svg>
+{% endmacro %}
+
+
+{# Sidebar collapse — left-pointing chevron for sidebar toggle #}
+{% macro sidebar_collapse(classes="h-5 w-5") %}
+<svg xmlns="http://www.w3.org/2000/svg" class="{{ classes }}" viewBox="0 0 20 20" fill="currentColor">
+    <path fill-rule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clip-rule="evenodd" />
+</svg>
+{% endmacro %}
+
+
+{# Brand sun — solar/sun icon used in sidebar brand header #}
+{% macro brand_sun(classes="h-8 w-8 text-amber-500") %}
+<svg xmlns="http://www.w3.org/2000/svg" class="{{ classes }}" viewBox="0 0 24 24" fill="currentColor">
+    <circle cx="12" cy="12" r="5" />
+    <line x1="12" y1="1" x2="12" y2="4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    <line x1="12" y1="20" x2="12" y2="23" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    <line x1="4.22" y1="4.22" x2="6.34" y2="6.34" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    <line x1="17.66" y1="17.66" x2="19.78" y2="19.78" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    <line x1="1" y1="12" x2="4" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    <line x1="20" y1="12" x2="23" y2="12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    <line x1="4.22" y1="19.78" x2="6.34" y2="17.66" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+    <line x1="17.66" y1="6.34" x2="19.78" y2="4.22" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+</svg>
+{% endmacro %}

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "partials/page-header.html" import page_header %}
 {% from "components/macros.html" import card %}
+{% from "components/confirm-dialog.html" import confirm_dialog %}
 
 {% block title %}Run History - Solar Challenge{% endblock %}
 
@@ -63,7 +64,7 @@
     </div>
 
     {# Compare selected button #}
-    <div class="mb-4 flex items-center gap-3" x-show="selectedIds.length >= 2">
+    <div class="mb-4 flex items-center gap-3" x-show="selectedIds.length >= 2" x-cloak>
         <a
             :href="'/history/compare?ids=' + selectedIds.join(',')"
             class="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-lg transition-colors shadow-sm"
@@ -89,7 +90,7 @@
                         @click="toggleSort('name')"
                     >
                         Name
-                        <span x-show="sort === 'name'" x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
+                        <span x-show="sort === 'name'" x-cloak x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
                     </th>
                     <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Type</th>
                     <th
@@ -104,7 +105,7 @@
                         @click="toggleSort('duration_seconds')"
                     >
                         Duration
-                        <span x-show="sort === 'duration_seconds'" x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
+                        <span x-show="sort === 'duration_seconds'" x-cloak x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
                     </th>
                     <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Generation</th>
                     <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Self-Cons.</th>
@@ -236,6 +237,7 @@
                                 {# Export CSV #}
                                 <a
                                     :href="'/history/api/runs/' + run.id + '/export/csv'"
+                                    @click="Alpine.store('toast').info('Exporting CSV...')"
                                     class="p-1.5 rounded text-slate-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                                     title="Export CSV"
                                 >
@@ -246,6 +248,7 @@
                                 {# Export YAML #}
                                 <a
                                     :href="'/history/api/runs/' + run.id + '/export/yaml'"
+                                    @click="Alpine.store('toast').info('Exporting YAML config...')"
                                     class="p-1.5 rounded text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                                     title="Export Config YAML"
                                 >
@@ -272,7 +275,7 @@
     </div>
 
     {# Pagination #}
-    <div class="mt-4 flex items-center justify-between" x-show="pagination.total_pages > 1">
+    <div class="mt-4 flex items-center justify-between" x-show="pagination.total_pages > 1" x-cloak>
         <div class="text-sm text-slate-500 dark:text-slate-400">
             Showing <span x-text="((pagination.page - 1) * pagination.per_page) + 1"></span>-<span x-text="Math.min(pagination.page * pagination.per_page, pagination.total)"></span> of <span x-text="pagination.total"></span> runs
         </div>
@@ -301,29 +304,15 @@
     </div>
 
     {# Delete confirmation modal #}
-    <div
-        x-show="showDeleteModal"
-        x-transition
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-        @click.self="showDeleteModal = false"
-    >
-        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl p-6 max-w-sm mx-4 border border-slate-200 dark:border-slate-700">
-            <h3 class="text-lg font-bold text-slate-900 dark:text-white mb-2">Delete Run</h3>
-            <p class="text-sm text-slate-600 dark:text-slate-400 mb-4">
-                Are you sure you want to delete "<span x-text="deleteTarget?.name" class="font-medium"></span>"? This action cannot be undone.
-            </p>
-            <div class="flex justify-end gap-3">
-                <button
-                    @click="showDeleteModal = false"
-                    class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
-                >Cancel</button>
-                <button
-                    @click="executeDelete()"
-                    class="px-4 py-2 text-sm font-medium rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors"
-                >Delete</button>
-            </div>
-        </div>
-    </div>
+    {{ confirm_dialog(
+        show_var="showDeleteModal",
+        title="Delete Run",
+        message_var="'Are you sure you want to delete \"' + (deleteTarget?.name || '') + '\"? This action cannot be undone.'",
+        confirm_text="Delete",
+        cancel_text="Cancel",
+        confirm_action="executeDelete()",
+        confirm_class="bg-red-600 hover:bg-red-700 text-white"
+    ) }}
 </div>
 
 <script>
@@ -414,15 +403,20 @@ function runBrowser() {
         async saveEdit(runId) {
             if (!this.editName.trim()) { this.cancelEdit(); return; }
             try {
-                await fetch('/history/api/runs/' + runId, {
+                const resp = await fetch('/history/api/runs/' + runId, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: this.editName.trim() }),
                 });
+                if (!resp.ok) {
+                    throw new Error('Server returned ' + resp.status);
+                }
                 const run = this.runs.find(r => r.id === runId);
                 if (run) run.name = this.editName.trim();
+                Alpine.store('toast').success('Run renamed successfully');
             } catch (e) {
                 console.error('Failed to rename run:', e);
+                Alpine.store('toast').error('Failed to rename run');
             }
             this.cancelEdit();
         },
@@ -435,11 +429,17 @@ function runBrowser() {
         async executeDelete() {
             if (!this.deleteTarget) return;
             try {
-                await fetch('/history/api/runs/' + this.deleteTarget.id, { method: 'DELETE' });
+                const resp = await fetch('/history/api/runs/' + this.deleteTarget.id, { method: 'DELETE' });
+                if (!resp.ok) {
+                    const data = await resp.json().catch(() => ({}));
+                    throw new Error(data.error || resp.statusText);
+                }
                 this.selectedIds = this.selectedIds.filter(id => id !== this.deleteTarget.id);
+                Alpine.store('toast').success('Run deleted successfully');
                 this.fetchRuns();
             } catch (e) {
                 console.error('Failed to delete run:', e);
+                Alpine.store('toast').error('Failed to delete run: ' + (e.message || 'Unknown error'));
             }
             this.showDeleteModal = false;
             this.deleteTarget = null;

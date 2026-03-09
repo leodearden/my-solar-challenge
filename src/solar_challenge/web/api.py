@@ -18,7 +18,7 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.routes import _LOCATION_PRESETS, _resolve_location
+from solar_challenge.web.routes import _resolve_location
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 

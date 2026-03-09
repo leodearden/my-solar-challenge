@@ -3,6 +3,10 @@
 
 {% block title %}Parameter Sweep{% endblock %}
 
+{% block head %}
+<script src="{{ url_for('static', filename='js/parameter-sweep.js') }}" defer></script>
+{% endblock %}
+
 {% block content %}
 
 {{ page_header(
@@ -12,114 +16,7 @@
 ) }}
 
 <div
-    x-data="{
-        // Sweep configuration
-        parameter: 'pv_capacity_kw',
-        minVal: 2.0,
-        maxVal: 8.0,
-        steps: 5,
-        mode: 'linear',
-
-        // Base config
-        configMode: 'preset',
-        basePreset: '',
-        baseConfig: {
-            battery_kwh: 5.0,
-            location: 'bristol',
-            days: 7
-        },
-
-        // Results
-        sweepId: null,
-        sweepValues: [],
-        sweepResults: [],
-        submitting: false,
-        errorMsg: '',
-
-        // Sweep point preview calculations
-        get previewValues() {
-            const min = parseFloat(this.minVal);
-            const max = parseFloat(this.maxVal);
-            const n = parseInt(this.steps);
-            if (isNaN(min) || isNaN(max) || isNaN(n) || n < 2 || min >= max) return [];
-
-            let values = [];
-            if (this.mode === 'geometric') {
-                const logMin = Math.log(min);
-                const logMax = Math.log(max);
-                for (let i = 0; i < n; i++) {
-                    values.push(Math.exp(logMin + (logMax - logMin) * i / (n - 1)));
-                }
-            } else {
-                for (let i = 0; i < n; i++) {
-                    values.push(min + (max - min) * i / (n - 1));
-                }
-            }
-            return values.map(v => Math.round(v * 1000) / 1000);
-        },
-
-        // Parameter options
-        parameterOptions: [
-            { value: 'pv_capacity_kw', label: 'PV Capacity (kW)', min: 1, max: 20, defaultMin: 2, defaultMax: 8 },
-            { value: 'battery_capacity_kwh', label: 'Battery Capacity (kWh)', min: 0, max: 50, defaultMin: 0, defaultMax: 13.5 },
-            { value: 'annual_consumption_kwh', label: 'Annual Consumption (kWh)', min: 1000, max: 10000, defaultMin: 2000, defaultMax: 5000 },
-            { value: 'n_homes', label: 'Number of Homes', min: 1, max: 500, defaultMin: 10, defaultMax: 100 },
-        ],
-
-        get currentParam() {
-            return this.parameterOptions.find(p => p.value === this.parameter) || this.parameterOptions[0];
-        },
-
-        onParameterChange() {
-            const param = this.currentParam;
-            this.minVal = param.defaultMin;
-            this.maxVal = param.defaultMax;
-        },
-
-        // Submit sweep
-        async submitSweep() {
-            this.submitting = true;
-            this.errorMsg = '';
-            this.sweepResults = [];
-
-            const payload = {
-                parameter: this.parameter,
-                min: parseFloat(this.minVal),
-                max: parseFloat(this.maxVal),
-                steps: parseInt(this.steps),
-                mode: this.mode,
-                base_config: this.baseConfig,
-            };
-
-            try {
-                const resp = await fetch('/api/simulate/sweep', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                const data = await resp.json();
-                if (!resp.ok) {
-                    this.errorMsg = data.error || 'Sweep submission failed';
-                } else {
-                    this.sweepId = data.sweep_id;
-                    this.sweepValues = data.values || [];
-                    // Populate initial results as pending
-                    this.sweepResults = this.sweepValues.map((v, i) => ({
-                        value: v,
-                        status: 'pending',
-                        generation: '-',
-                        self_consumption: '-',
-                        grid_import: '-',
-                        job_id: data.job_ids ? data.job_ids[i] : null,
-                    }));
-                }
-            } catch (e) {
-                this.errorMsg = 'Network error: ' + e.message;
-            } finally {
-                this.submitting = false;
-            }
-        }
-    }"
+    x-data="parameterSweep()"
     class="space-y-6"
 >
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -210,11 +107,11 @@
                     class="w-full px-4 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-300 dark:disabled:bg-slate-600 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
                 >
                     <span x-show="!submitting">Run Parameter Sweep</span>
-                    <span x-show="submitting">Submitting...</span>
+                    <span x-show="submitting" x-cloak>Submitting...</span>
                 </button>
 
                 <!-- Error display -->
-                <div x-show="errorMsg" class="px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-l-4 border-red-500 text-sm"
+                <div x-show="errorMsg" x-cloak class="px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-l-4 border-red-500 text-sm"
                     x-text="errorMsg"></div>
             </div>
         </div>
@@ -256,7 +153,7 @@
                         (<span x-text="mode"></span> scale)
                     </p>
                 </div>
-                <div x-show="previewValues.length === 0" class="text-sm text-slate-400 text-center py-8">
+                <div x-show="previewValues.length === 0" x-cloak class="text-sm text-slate-400 text-center py-8">
                     Set valid min, max and steps to see preview
                 </div>
             </div>
@@ -264,7 +161,7 @@
     </div>
 
     <!-- Results Table -->
-    <div x-show="sweepResults.length > 0" class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+    <div x-show="sweepResults.length > 0" x-cloak class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
         <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700">
             <h3 class="font-semibold text-slate-800 dark:text-white">Sweep Results</h3>
             <p class="text-xs text-slate-400 mt-1">Sweep ID: <span x-text="sweepId"></span></p>
@@ -307,7 +204,7 @@
     </div>
 
     <!-- Sweep Chart Placeholder -->
-    <div x-show="sweepResults.length > 0 && sweepResults.some(r => r.status === 'completed')"
+    <div x-show="sweepResults.length > 0 && sweepResults.some(r => r.status === 'completed')" x-cloak
         class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-5">
         <div id="sweep-chart" class="w-full h-96"></div>
     </div>

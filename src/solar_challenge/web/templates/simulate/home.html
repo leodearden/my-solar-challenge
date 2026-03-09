@@ -227,17 +227,17 @@ document.addEventListener('alpine:init', () => {
             </div>
 
             <!-- Battery tab -->
-            <div x-show="activeTab === 'battery'" role="tabpanel">
+            <div x-show="activeTab === 'battery'" x-cloak role="tabpanel">
                 {% include "simulate/partials/battery-config.html" %}
             </div>
 
             <!-- Load tab -->
-            <div x-show="activeTab === 'load'" role="tabpanel">
+            <div x-show="activeTab === 'load'" x-cloak role="tabpanel">
                 {% include "simulate/partials/load-config.html" %}
             </div>
 
             <!-- Location tab -->
-            <div x-show="activeTab === 'location'" role="tabpanel">
+            <div x-show="activeTab === 'location'" x-cloak role="tabpanel">
                 <div class="space-y-6">
                     <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Location</h3>
                     <p class="text-sm text-slate-500 dark:text-slate-400">Select a UK city preset or enter custom coordinates.</p>
@@ -259,7 +259,7 @@ document.addEventListener('alpine:init', () => {
                     </div>
 
                     <!-- Custom lat/lon fields -->
-                    <div x-show="formData.location === 'custom'" x-transition class="grid grid-cols-2 gap-4">
+                    <div x-show="formData.location === 'custom'" x-cloak x-transition class="grid grid-cols-2 gap-4">
                         <div class="space-y-1.5">
                             <label for="custom_lat" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Latitude</label>
                             <input
@@ -291,7 +291,7 @@ document.addEventListener('alpine:init', () => {
             </div>
 
             <!-- Period tab -->
-            <div x-show="activeTab === 'period'" role="tabpanel">
+            <div x-show="activeTab === 'period'" x-cloak role="tabpanel">
                 <div class="space-y-6">
                     <h3 class="text-lg font-semibold text-slate-800 dark:text-slate-100">Simulation Period</h3>
                     <p class="text-sm text-slate-500 dark:text-slate-400">Choose a quick preset duration or specify a custom date range.</p>
@@ -328,7 +328,7 @@ document.addEventListener('alpine:init', () => {
                     </div>
 
                     <!-- Custom date range -->
-                    <div x-show="formData.period_mode === 'custom'" x-transition class="grid grid-cols-2 gap-4">
+                    <div x-show="formData.period_mode === 'custom'" x-cloak x-transition class="grid grid-cols-2 gap-4">
                         <div class="space-y-1.5">
                             <label for="start_date" class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Start Date</label>
                             <input
@@ -394,7 +394,7 @@ document.addEventListener('alpine:init', () => {
                 :disabled="submitting"
                 class="px-6 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium text-sm transition-colors flex items-center gap-2 whitespace-nowrap"
             >
-                <svg x-show="submitting" class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <svg x-show="submitting" x-cloak class="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                 </svg>

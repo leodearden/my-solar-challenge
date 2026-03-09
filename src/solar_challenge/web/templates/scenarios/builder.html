@@ -6,6 +6,7 @@
 {% block head %}
 <!-- js-yaml for client-side YAML parsing (used by Upload YAML feature) -->
 <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+<script src="{{ url_for('static', filename='js/scenario-builder.js') }}" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -17,237 +18,7 @@
 ) }}
 
 <div
-    x-data="{
-        // Form state
-        name: '',
-        description: '',
-        start_date: '2024-01-01',
-        end_date: '2024-12-31',
-        location_preset: 'bristol',
-        latitude: 51.45,
-        longitude: -2.58,
-        altitude: 11.0,
-        n_homes: 100,
-        pv_capacity_kw: 4.0,
-        pv_distribution_type: '',
-        pv_mean: 4.0,
-        pv_std: 1.0,
-        pv_min: 2.0,
-        pv_max: 8.0,
-        battery_capacity_kwh: 5.0,
-        battery_distribution_type: '',
-        battery_mean: 5.0,
-        battery_std: 2.0,
-        battery_min: 0,
-        battery_max: 13.5,
-        annual_consumption_kwh: 3500,
-        load_distribution_type: '',
-        load_mean: 3400,
-        load_std: 800,
-        load_min: 2000,
-        load_max: 5000,
-        import_rate: 0.245,
-        export_rate: 0.15,
-
-        // UI state
-        yamlPreview: '# Configure your scenario...',
-        validationResult: null,
-        accordionOpen: 'general',
-        presetDropdownOpen: false,
-        presets: [],
-        debounceTimer: null,
-
-        // Quick period presets
-        setPeriod(preset) {
-            if (preset === 'full-year') {
-                this.start_date = '2024-01-01';
-                this.end_date = '2024-12-31';
-            } else if (preset === 'summer') {
-                this.start_date = '2024-06-01';
-                this.end_date = '2024-08-31';
-            } else if (preset === 'winter') {
-                this.start_date = '2024-12-01';
-                this.end_date = '2025-02-28';
-            } else if (preset === 'week') {
-                this.start_date = '2024-06-01';
-                this.end_date = '2024-06-07';
-            } else if (preset === 'month') {
-                this.start_date = '2024-06-01';
-                this.end_date = '2024-06-30';
-            }
-            this.updatePreview();
-        },
-
-        // Debounced YAML preview update
-        updatePreview() {
-            clearTimeout(this.debounceTimer);
-            this.debounceTimer = setTimeout(() => this.fetchPreview(), 500);
-        },
-
-        // Fetch YAML preview from the API
-        async fetchPreview() {
-            const formData = this.getFormData();
-            try {
-                const resp = await fetch('/scenarios/api/preview-yaml', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(formData)
-                });
-                const result = await resp.json();
-                this.yamlPreview = result.yaml || '# Error generating preview';
-            } catch (e) {
-                this.yamlPreview = '# Error: could not generate preview';
-            }
-        },
-
-        // Validate scenario
-        async validateScenario() {
-            const formData = this.getFormData();
-            try {
-                const resp = await fetch('/scenarios/api/validate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(formData)
-                });
-                this.validationResult = await resp.json();
-            } catch (e) {
-                this.validationResult = { valid: false, errors: ['Network error'] };
-            }
-        },
-
-        // Save scenario
-        async saveScenario() {
-            const name = prompt('Enter a name for this scenario:', this.name || 'My Scenario');
-            if (!name) return;
-            const formData = this.getFormData();
-            try {
-                const resp = await fetch('/scenarios/api/save', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: name, config: formData })
-                });
-                const result = await resp.json();
-                if (resp.ok) {
-                    this.validationResult = { valid: true, errors: [], message: 'Scenario saved as: ' + name };
-                } else {
-                    this.validationResult = { valid: false, errors: [result.error || 'Save failed'] };
-                }
-            } catch (e) {
-                this.validationResult = { valid: false, errors: ['Network error during save'] };
-            }
-        },
-
-        // Download YAML
-        downloadYaml() {
-            const blob = new Blob([this.yamlPreview], { type: 'text/yaml' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = (this.name || 'scenario') + '.yaml';
-            a.click();
-            URL.revokeObjectURL(url);
-        },
-
-        // Upload YAML file
-        async uploadYaml(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-            const text = await file.text();
-            this.yamlPreview = text;
-            // Try to parse and populate form
-            try {
-                const parsed = (typeof jsyaml !== 'undefined') ? jsyaml.load(text) : null;
-                // Basic population from parsed YAML
-                if (parsed && parsed.name) this.name = parsed.name;
-            } catch (e) { /* ignore parse errors */ }
-        },
-
-        // Load presets list
-        async loadPresets() {
-            try {
-                const resp = await fetch('/scenarios/api/presets');
-                const data = await resp.json();
-                this.presets = data.presets || [];
-            } catch (e) {
-                this.presets = [];
-            }
-        },
-
-        // Load a specific preset
-        async loadPreset(presetName) {
-            try {
-                const resp = await fetch('/scenarios/api/presets/' + presetName);
-                const data = await resp.json();
-                if (data.config) {
-                    const cfg = data.config;
-                    if (cfg.name) this.name = cfg.name;
-                    if (cfg.location) {
-                        this.latitude = cfg.location.latitude || 51.45;
-                        this.longitude = cfg.location.longitude || -2.58;
-                        this.location_preset = 'custom';
-                    }
-                    if (cfg.fleet_distribution) {
-                        const fd = cfg.fleet_distribution;
-                        if (fd.n_homes) this.n_homes = fd.n_homes;
-                    }
-                }
-                this.presetDropdownOpen = false;
-                this.updatePreview();
-            } catch (e) { /* ignore */ }
-        },
-
-        getFormData() {
-            const data = {
-                name: this.name,
-                description: this.description,
-                start_date: this.start_date,
-                end_date: this.end_date,
-                location_preset: this.location_preset,
-                n_homes: this.n_homes,
-                import_rate: this.import_rate,
-                export_rate: this.export_rate,
-            };
-            if (this.location_preset === 'custom') {
-                data.latitude = this.latitude;
-                data.longitude = this.longitude;
-                data.altitude = this.altitude;
-            }
-            if (this.pv_distribution_type) {
-                data.pv_distribution_type = this.pv_distribution_type;
-                data.pv_mean = this.pv_mean;
-                data.pv_std = this.pv_std;
-                data.pv_min = this.pv_min;
-                data.pv_max = this.pv_max;
-            } else {
-                data.pv_capacity_kw = this.pv_capacity_kw;
-            }
-            if (this.battery_distribution_type) {
-                data.battery_distribution_type = this.battery_distribution_type;
-                data.battery_mean = this.battery_mean;
-                data.battery_std = this.battery_std;
-                data.battery_min = this.battery_min;
-                data.battery_max = this.battery_max;
-            } else {
-                data.battery_capacity_kwh = this.battery_capacity_kwh;
-            }
-            if (this.load_distribution_type) {
-                data.load_distribution_type = this.load_distribution_type;
-                data.load_mean = this.load_mean;
-                data.load_std = this.load_std;
-                data.load_min = this.load_min;
-                data.load_max = this.load_max;
-            } else {
-                data.annual_consumption_kwh = this.annual_consumption_kwh;
-            }
-            return data;
-        },
-
-        init() {
-            this.loadPresets();
-            this.fetchPreview();
-        }
-    }"
-    x-init="init()"
+    x-data="scenarioBuilder()"
     class="grid grid-cols-1 lg:grid-cols-5 gap-6"
 >
     <!-- Left Pane: Structured Form (60%) -->
@@ -289,7 +60,7 @@
                     <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
                 </svg>
             </button>
-            <div x-show="accordionOpen === 'period'" x-collapse class="px-5 pb-5 space-y-4">
+            <div x-show="accordionOpen === 'period'" x-cloak x-collapse class="px-5 pb-5 space-y-4">
                 <div class="flex flex-wrap gap-2 mb-3">
                     <button @click="setPeriod('full-year')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">Full Year</button>
                     <button @click="setPeriod('summer')" class="px-3 py-1.5 text-xs rounded-full bg-slate-100 dark:bg-slate-700 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors">Summer</button>
@@ -323,7 +94,7 @@
                     <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
                 </svg>
             </button>
-            <div x-show="accordionOpen === 'location'" x-collapse class="px-5 pb-5 space-y-4">
+            <div x-show="accordionOpen === 'location'" x-cloak x-collapse class="px-5 pb-5 space-y-4">
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Location Preset</label>
                     <select x-model="location_preset" @change="updatePreview()"
@@ -335,7 +106,7 @@
                         <option value="custom">Custom Location</option>
                     </select>
                 </div>
-                <div x-show="location_preset === 'custom'" class="grid grid-cols-3 gap-4">
+                <div x-show="location_preset === 'custom'" x-cloak class="grid grid-cols-3 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Latitude</label>
                         <input type="number" step="0.01" x-model="latitude" @input="updatePreview()"
@@ -366,7 +137,7 @@
                     <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
                 </svg>
             </button>
-            <div x-show="accordionOpen === 'fleet'" x-collapse class="px-5 pb-5 space-y-5">
+            <div x-show="accordionOpen === 'fleet'" x-cloak x-collapse class="px-5 pb-5 space-y-5">
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Number of Homes</label>
                     <input type="number" min="1" max="10000" x-model="n_homes" @input="updatePreview()"
@@ -390,7 +161,7 @@
                             <input type="number" step="0.1" min="0.5" max="20" x-model="pv_capacity_kw" @input="updatePreview()"
                                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                         </div>
-                        <div x-show="pv_distribution_type === 'normal'" class="grid grid-cols-2 gap-3">
+                        <div x-show="pv_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Mean</label>
                                 <input type="number" step="0.1" x-model="pv_mean" @input="updatePreview()"
@@ -402,7 +173,7 @@
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
                         </div>
-                        <div x-show="pv_distribution_type" class="grid grid-cols-2 gap-3">
+                        <div x-show="pv_distribution_type" x-cloak class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
                                 <input type="number" step="0.1" x-model="pv_min" @input="updatePreview()"
@@ -434,7 +205,7 @@
                             <input type="number" step="0.1" min="0" max="100" x-model="battery_capacity_kwh" @input="updatePreview()"
                                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                         </div>
-                        <div x-show="battery_distribution_type === 'normal'" class="grid grid-cols-2 gap-3">
+                        <div x-show="battery_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Mean</label>
                                 <input type="number" step="0.1" x-model="battery_mean" @input="updatePreview()"
@@ -446,7 +217,7 @@
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
                         </div>
-                        <div x-show="battery_distribution_type" class="grid grid-cols-2 gap-3">
+                        <div x-show="battery_distribution_type" x-cloak class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
                                 <input type="number" step="0.1" x-model="battery_min" @input="updatePreview()"
@@ -478,7 +249,7 @@
                             <input type="number" step="100" min="500" max="20000" x-model="annual_consumption_kwh" @input="updatePreview()"
                                 class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
                         </div>
-                        <div x-show="load_distribution_type === 'normal'" class="grid grid-cols-2 gap-3">
+                        <div x-show="load_distribution_type === 'normal'" x-cloak class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Mean</label>
                                 <input type="number" step="100" x-model="load_mean" @input="updatePreview()"
@@ -490,7 +261,7 @@
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
                         </div>
-                        <div x-show="load_distribution_type" class="grid grid-cols-2 gap-3">
+                        <div x-show="load_distribution_type" x-cloak class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
                                 <input type="number" step="100" x-model="load_min" @input="updatePreview()"
@@ -518,7 +289,7 @@
                     <path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" />
                 </svg>
             </button>
-            <div x-show="accordionOpen === 'tariff'" x-collapse class="px-5 pb-5 space-y-4">
+            <div x-show="accordionOpen === 'tariff'" x-cloak x-collapse class="px-5 pb-5 space-y-4">
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Import Rate (GBP/kWh)</label>
@@ -547,7 +318,7 @@
                     class="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-sm font-medium rounded-lg hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors">
                     Load Preset
                 </button>
-                <div x-show="presetDropdownOpen" @click.away="presetDropdownOpen = false"
+                <div x-show="presetDropdownOpen" x-cloak @click.away="presetDropdownOpen = false"
                     class="absolute top-full left-0 mt-1 w-56 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
                     <template x-for="preset in presets" :key="preset.name">
                         <button @click="loadPreset(preset.name)"
@@ -575,12 +346,12 @@
         </div>
 
         <!-- Validation Result -->
-        <div x-show="validationResult" class="mt-2">
-            <div x-show="validationResult && validationResult.valid"
+        <div x-show="validationResult" x-cloak class="mt-2">
+            <div x-show="validationResult && validationResult.valid" x-cloak
                 class="px-4 py-3 rounded-lg bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border-l-4 border-green-500 text-sm">
                 <span x-text="validationResult?.message || 'Scenario configuration is valid.'"></span>
             </div>
-            <div x-show="validationResult && !validationResult.valid"
+            <div x-show="validationResult && !validationResult.valid" x-cloak
                 class="px-4 py-3 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-l-4 border-red-500 text-sm">
                 <strong>Validation errors:</strong>
                 <ul class="mt-1 list-disc list-inside">

@@ -24,20 +24,9 @@ from flask import (
 )
 
 from solar_challenge.web.database import get_db
-from solar_challenge.web.storage import RunStorage
+from solar_challenge.web.shared import get_storage
 
 bp = Blueprint("history", __name__)
-
-
-def _get_storage() -> RunStorage:
-    """Get RunStorage instance configured from Flask app config.
-
-    Returns:
-        RunStorage: Configured storage service instance.
-    """
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
-    return RunStorage(db_path=db_path, data_dir=data_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +297,7 @@ def api_delete_run(run_id: str) -> Response | tuple[Response, int]:
     if row is None:
         return jsonify({"error": "Run not found"}), 404
 
-    storage = _get_storage()
+    storage = get_storage()
     storage.delete_run(run_id)
     return jsonify({"success": True, "message": f"Run {run_id} deleted"})
 
@@ -381,7 +370,7 @@ def api_export_csv(run_id: str) -> Response | tuple[Response, int]:
     if row is None:
         return jsonify({"error": "Run not found"}), 404
 
-    storage = _get_storage()
+    storage = get_storage()
     run_type = row["type"]
     run_name = row["name"] or "run"
 

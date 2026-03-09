@@ -15,6 +15,8 @@ from typing import Any
 import yaml
 from flask import Blueprint, Response, current_app, jsonify, render_template, request
 
+from solar_challenge.web.shared import location_presets_as_dicts
+
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("scenarios", __name__)
@@ -60,12 +62,7 @@ def _form_to_yaml_dict(data: dict[str, Any]) -> dict[str, Any]:
         if data.get("altitude"):
             location["altitude"] = float(data["altitude"])
     elif loc_preset:
-        presets = {
-            "bristol": {"latitude": 51.45, "longitude": -2.58, "altitude": 11.0, "name": "Bristol, UK"},
-            "london": {"latitude": 51.51, "longitude": -0.13, "altitude": 11.0, "name": "London, UK"},
-            "edinburgh": {"latitude": 55.95, "longitude": -3.19, "altitude": 47.0, "name": "Edinburgh, UK"},
-            "manchester": {"latitude": 53.48, "longitude": -2.24, "altitude": 38.0, "name": "Manchester, UK"},
-        }
+        presets = location_presets_as_dicts()
         location = dict(presets.get(loc_preset, presets["bristol"]))
     location["timezone"] = "Europe/London"
     if location:

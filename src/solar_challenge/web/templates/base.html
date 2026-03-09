@@ -8,51 +8,21 @@
     <!-- Favicon -->
     <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
 
-    <!-- Tailwind CSS (CDN play mode) -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind CSS (compiled) -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='dist/style.css') }}">
+    <!-- CDN fallback (uncomment if compiled CSS is unavailable):
+    <script src="https://cdn.tailwindcss.com/3.4.17"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
-            theme: {
-                extend: {
-                    colors: {
-                        primary: {
-                            50: '#fffbeb',
-                            100: '#fef3c7',
-                            200: '#fde68a',
-                            300: '#fcd34d',
-                            400: '#fbbf24',
-                            500: '#f59e0b',
-                            600: '#d97706',
-                            700: '#b45309',
-                            800: '#92400e',
-                            900: '#78350f',
-                        },
-                        secondary: {
-                            50: '#f0f9ff',
-                            100: '#e0f2fe',
-                            200: '#bae6fd',
-                            300: '#7dd3fc',
-                            400: '#38bdf8',
-                            500: '#0ea5e9',
-                            600: '#0284c7',
-                            700: '#0369a1',
-                            800: '#075985',
-                            900: '#0c4a6e',
-                        },
-                        solar: {
-                            generation: '#f5a623',
-                            demand: '#d0021b',
-                            'self-consumption': '#7ed321',
-                            'grid-import': '#9b9b9b',
-                            'grid-export': '#4a90e2',
-                            battery: '#50e3c2',
-                        },
-                    },
-                },
-            },
+            theme: { extend: { colors: {
+                primary: { 50:'#fffbeb',100:'#fef3c7',200:'#fde68a',300:'#fcd34d',400:'#fbbf24',500:'#f59e0b',600:'#d97706',700:'#b45309',800:'#92400e',900:'#78350f' },
+                secondary: { 50:'#f0f9ff',100:'#e0f2fe',200:'#bae6fd',300:'#7dd3fc',400:'#38bdf8',500:'#0ea5e9',600:'#0284c7',700:'#0369a1',800:'#075985',900:'#0c4a6e' },
+                solar: { generation:'#f5a623',demand:'#d0021b','self-consumption':'#7ed321','grid-import':'#9b9b9b','grid-export':'#4a90e2',battery:'#50e3c2' }
+            }}}
         }
     </script>
+    -->
 
     <!-- Alpine.js plugins (must load before Alpine core) -->
     <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/collapse@3.14.8/dist/cdn.min.js"></script>
@@ -64,9 +34,6 @@
 
     <!-- HTMX SSE extension for real-time progress tracking -->
     <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
-
-    <!-- Plotly.js -->
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
 
     <!-- Project stylesheet -->
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -90,6 +57,10 @@
           darkMode: document.documentElement.classList.contains('dark')
       }"
 >
+    <!-- Skip to main content (accessibility) -->
+    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-primary-500 focus:text-white focus:rounded-lg focus:outline-none">
+        Skip to main content
+    </a>
     <!-- Sidebar navigation -->
     {% include "partials/nav-sidebar.html" %}
 
@@ -134,7 +105,7 @@
         {% endwith %}
 
         <!-- Page content -->
-        <main class="flex-1 px-4 sm:px-6 lg:px-8 py-6">
+        <main id="main-content" class="flex-1 px-4 sm:px-6 lg:px-8 py-6">
             {% block content %}{% endblock %}
         </main>
 
@@ -145,5 +116,10 @@
             </div>
         </footer>
     </div>
+
+    <!-- Toast notifications -->
+    {% include "components/toast.html" %}
+
+    {% block scripts %}{% endblock %}
 </body>
 </html>

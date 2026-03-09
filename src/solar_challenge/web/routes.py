@@ -6,7 +6,6 @@ from typing import Any
 
 from flask import (
     Blueprint,
-    current_app,
     flash,
     redirect,
     render_template,
@@ -14,6 +13,7 @@ from flask import (
 )
 
 from solar_challenge.location import Location
+from solar_challenge.web.shared import LOCATION_PRESETS, get_storage
 from solar_challenge.web.storage import RunStorage
 
 bp = Blueprint("main", __name__)
@@ -26,38 +26,6 @@ BUILTIN_PRESETS: list[dict[str, Any]] = [
 ]
 
 
-def get_storage() -> RunStorage:
-    """Get RunStorage instance configured from Flask app config.
-
-    Returns:
-        RunStorage: Configured storage service instance.
-    """
-    db_path = current_app.config["DATABASE"]
-    data_dir = current_app.config["DATA_DIR"]
-    return RunStorage(db_path=db_path, data_dir=data_dir)
-
-
-# UK location presets available from the web form.
-_LOCATION_PRESETS: dict[str, Location] = {
-    "bristol": Location(
-        latitude=51.45, longitude=-2.58,
-        timezone="Europe/London", altitude=11.0, name="Bristol, UK",
-    ),
-    "london": Location(
-        latitude=51.51, longitude=-0.13,
-        timezone="Europe/London", altitude=11.0, name="London, UK",
-    ),
-    "edinburgh": Location(
-        latitude=55.95, longitude=-3.19,
-        timezone="Europe/London", altitude=47.0, name="Edinburgh, UK",
-    ),
-    "manchester": Location(
-        latitude=53.48, longitude=-2.24,
-        timezone="Europe/London", altitude=38.0, name="Manchester, UK",
-    ),
-}
-
-
 def _resolve_location(preset_str: str) -> Location:
     """Map a location string to a Location instance.
 
@@ -65,8 +33,8 @@ def _resolve_location(preset_str: str) -> Location:
     a 'lat,lon' string.  Falls back to Bristol on parse errors.
     """
     key = preset_str.strip().lower()
-    if key in _LOCATION_PRESETS:
-        return _LOCATION_PRESETS[key]
+    if key in LOCATION_PRESETS:
+        return LOCATION_PRESETS[key]
     try:
         lat, lon = map(float, key.split(","))
         return Location(latitude=lat, longitude=lon)
@@ -123,12 +91,6 @@ def index() -> str:
             "type": run.get("type", "home"),
             "date": (run.get("created_at", "")[:10] if run.get("created_at") else ""),
             "status": run.get("status", "unknown"),
-            "_row": [
-                run.get("name", "Unnamed"),
-                run.get("type", "home"),
-                (run.get("created_at", "")[:10] if run.get("created_at") else ""),
-                run.get("status", "unknown"),
-            ],
         })
 
     return str(render_template(
