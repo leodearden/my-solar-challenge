@@ -20,7 +20,7 @@
     >
         <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-2">{{ title }}</h3>
         {% if message_var %}
-        <p class="text-slate-600 dark:text-slate-400 mb-6" x-html="{{ message_var }}"></p>
+        <p class="text-slate-600 dark:text-slate-400 mb-6" x-text="{{ message_var }}"></p>
         {% elif message_text %}
         <p class="text-slate-600 dark:text-slate-400 mb-6">{{ message_text }}</p>
         {% endif %}
