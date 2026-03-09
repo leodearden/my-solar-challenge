@@ -486,14 +486,10 @@ def simulate_fleet_from_distribution() -> tuple[Response, int]:
         config = form_to_fleet_distribution_config(data)
     except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
-    # For now, return the parsed config as confirmation.
-    # Full integration with JobManager would generate HomeConfigs via
-    # generate_homes_from_distribution() and submit to the job queue.
     return jsonify({
-        "status": "accepted",
+        "error": "Fleet distribution simulation not yet implemented",
         "n_homes": config.get("n_homes", 0),
-        "config": config,
-    }), 201
+    }), 501
 
 @api_bp.route("/fleet/export-yaml", methods=["POST"])  # type: ignore[untyped-decorator]
 def export_fleet_yaml() -> Response:
@@ -593,16 +589,8 @@ def simulate_sweep() -> tuple[Response, int]:
     else:
         values = [min_val + (max_val - min_val) * i / (steps - 1) for i in range(steps)]
 
-    sweep_id = str(_uuid.uuid4())
-    job_ids: list[str] = []
-
-    # NOTE: Full job submission per sweep point would go here once
-    # the JobManager supports sweep orchestration.  For now we return
-    # the generated values so the UI can display them.
-
     return jsonify({
-        "sweep_id": sweep_id,
+        "error": "Parameter sweep not yet implemented",
         "parameter": parameter,
         "values": [round(v, 3) for v in values],
-        "job_ids": job_ids,
-    }), 201
+    }), 501

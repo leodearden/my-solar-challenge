@@ -639,8 +639,8 @@ class TestGetPreset:
 class TestSimulateSweep:
     """Tests for POST /api/simulate/sweep."""
 
-    def test_valid_linear_sweep_returns_201(self, client: FlaskClient) -> None:
-        """Linear sweep with valid params returns 201."""
+    def test_valid_linear_sweep_returns_501(self, client: FlaskClient) -> None:
+        """Linear sweep with valid params returns 501 (not yet implemented)."""
         resp = client.post(
             "/api/simulate/sweep",
             json={
@@ -651,17 +651,17 @@ class TestSimulateSweep:
                 "mode": "linear",
             },
         )
-        assert resp.status_code == 201
+        assert resp.status_code == 501
         data = resp.get_json()
-        assert "sweep_id" in data
+        assert "not yet implemented" in data["error"]
         assert data["parameter"] == "pv_capacity_kw"
         assert len(data["values"]) == 5
         # First and last values should match min/max
         assert data["values"][0] == pytest.approx(1.0, abs=0.01)
         assert data["values"][-1] == pytest.approx(10.0, abs=0.01)
 
-    def test_valid_geometric_sweep_returns_201(self, client: FlaskClient) -> None:
-        """Geometric sweep with valid params returns 201."""
+    def test_valid_geometric_sweep_returns_501(self, client: FlaskClient) -> None:
+        """Geometric sweep with valid params returns 501 (not yet implemented)."""
         resp = client.post(
             "/api/simulate/sweep",
             json={
@@ -672,7 +672,7 @@ class TestSimulateSweep:
                 "mode": "geometric",
             },
         )
-        assert resp.status_code == 201
+        assert resp.status_code == 501
         data = resp.get_json()
         assert len(data["values"]) == 3
         assert data["values"][0] == pytest.approx(1.0, abs=0.01)
@@ -745,17 +745,8 @@ class TestSimulateSweep:
             "/api/simulate/sweep",
             json={"min": 1.0, "max": 5.0, "steps": 2},
         )
-        assert resp.status_code == 201
+        assert resp.status_code == 501
         assert resp.get_json()["parameter"] == "pv_capacity_kw"
-
-    def test_sweep_returns_empty_job_ids(self, client: FlaskClient) -> None:
-        """Sweep response job_ids list is empty (not yet integrated)."""
-        resp = client.post(
-            "/api/simulate/sweep",
-            json={"min": 1.0, "max": 5.0, "steps": 2},
-        )
-        assert resp.status_code == 201
-        assert resp.get_json()["job_ids"] == []
 
 
 # ===================================================================
@@ -822,8 +813,8 @@ class TestPreviewDistribution:
 class TestFleetFromDistribution:
     """Tests for POST /api/simulate/fleet-from-distribution."""
 
-    def test_valid_distribution_config_returns_201(self, client: FlaskClient) -> None:
-        """Valid fleet distribution config returns 201."""
+    def test_valid_distribution_config_returns_501(self, client: FlaskClient) -> None:
+        """Valid fleet distribution config returns 501 (not yet implemented)."""
         resp = client.post(
             "/api/simulate/fleet-from-distribution",
             json={
@@ -833,9 +824,9 @@ class TestFleetFromDistribution:
                 "load": {"annual_consumption_kwh": 3500.0},
             },
         )
-        assert resp.status_code == 201
+        assert resp.status_code == 501
         data = resp.get_json()
-        assert data["status"] == "accepted"
+        assert "not yet implemented" in data["error"]
         assert data["n_homes"] == 10
 
     def test_no_json_body_returns_400(self, client: FlaskClient) -> None:
