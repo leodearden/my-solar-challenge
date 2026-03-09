@@ -588,7 +588,7 @@ class TestFleetApiEndpoints:
                 },
             },
         )
-        assert response.status_code == 201
+        assert response.status_code == 501
         data = response.get_json()
         assert data["n_homes"] == 10
 

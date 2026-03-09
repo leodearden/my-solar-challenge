@@ -149,23 +149,10 @@
 
 {% block scripts %}
 <script src="https://cdn.plot.ly/plotly-2.27.0.min.js" charset="utf-8"></script>
+<script src="{{ url_for('static', filename='js/chart-renderer.js') }}"></script>
 <script>
 (function () {
     "use strict";
-
-    var plotlyConfig = { responsive: true, displayModeBar: true, scrollZoom: false };
-
-    function renderChart(elementId, jsonStr) {
-        if (!jsonStr || jsonStr === '{}') return;
-        var el = document.getElementById(elementId);
-        if (!el) return;
-        try {
-            var fig = JSON.parse(jsonStr);
-            Plotly.newPlot(elementId, fig.data, fig.layout, plotlyConfig);
-        } catch (e) {
-            console.error('Failed to render chart ' + elementId, e);
-        }
-    }
 
     // Aggregate tab
     renderChart('chart-aggregate-timeline', {{ charts.aggregate_timeline | tojson }});
