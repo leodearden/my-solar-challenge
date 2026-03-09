@@ -1,0 +1,167 @@
+"""End-to-end tests for mobile responsive layout.
+
+Verifies that the app renders correctly at a mobile viewport (375x812),
+the hamburger menu is visible, the desktop sidebar is hidden, the mobile
+menu opens, and key pages remain usable on small screens.
+"""
+
+import pytest
+from playwright.sync_api import Page, expect
+
+pytestmark = pytest.mark.e2e
+
+MOBILE_WIDTH = 375
+MOBILE_HEIGHT = 812
+
+
+# -- Mobile dashboard rendering --------------------------------------------
+
+
+def test_mobile_dashboard_renders(page: Page, live_server: str) -> None:
+    """At 375x812 viewport, the dashboard renders without errors."""
+    page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
+
+    response = page.goto(live_server + "/")
+    assert response is not None
+    assert response.status == 200
+
+    page.wait_for_load_state("domcontentloaded")
+
+    # On mobile, the desktop sidebar is hidden.  The "Solar Challenge"
+    # title is in the mobile top bar header (the one with class lg:hidden).
+    mobile_header = page.locator("header.lg\\:hidden")
+    expect(mobile_header).to_be_visible()
+
+    # The brand name inside the mobile header
+    brand = mobile_header.locator("text=Solar Challenge")
+    expect(brand).to_be_visible()
+
+
+# -- Hamburger menu button visible -----------------------------------------
+
+
+def test_mobile_hamburger_visible(page: Page, live_server: str) -> None:
+    """At 375px width, the hamburger menu button (in the lg:hidden mobile
+    header) should be visible.
+    """
+    page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
+    page.goto(live_server + "/")
+    page.wait_for_load_state("domcontentloaded")
+
+    # The hamburger button has aria-label="Open menu" and is inside
+    # the mobile top bar header (which has the class lg:hidden)
+    hamburger = page.locator('button[aria-label="Open menu"]')
+    expect(hamburger).to_be_visible()
+
+
+# -- Desktop sidebar hidden on mobile -------------------------------------
+
+
+def test_mobile_sidebar_hidden(page: Page, live_server: str) -> None:
+    """At 375px width, the desktop sidebar (aside with class 'hidden lg:flex')
+    should not be visible.
+    """
+    page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
+    page.goto(live_server + "/")
+    page.wait_for_load_state("domcontentloaded")
+
+    # The desktop sidebar is the first <aside> which has class "hidden lg:flex"
+    desktop_sidebar = page.locator("aside").first
+    expect(desktop_sidebar).not_to_be_visible()
+
+
+# -- Mobile menu opens on hamburger click ----------------------------------
+
+
+def test_mobile_menu_opens(page: Page, live_server: str) -> None:
+    """At 375px width, clicking the hamburger button opens the mobile menu
+    overlay and sidebar.
+    """
+    page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
+    page.goto(live_server + "/")
+    page.wait_for_load_state("domcontentloaded")
+
+    # Click the hamburger button
+    hamburger = page.locator('button[aria-label="Open menu"]')
+    hamburger.click()
+
+    # Wait for the slide-in transition
+    page.wait_for_timeout(400)
+
+    # The mobile sidebar (the <aside> with class "lg:hidden" that has
+    # x-show="mobileMenuOpen") should now be visible
+    mobile_sidebar = page.locator("aside.lg\\:hidden")
+    expect(mobile_sidebar).to_be_visible()
+
+    # The close button inside the mobile sidebar should be visible
+    close_btn = page.locator('button[aria-label="Close menu"]')
+    expect(close_btn).to_be_visible()
+
+    # Navigation links should be present in the mobile sidebar
+    mobile_nav = mobile_sidebar.locator("nav")
+    expect(mobile_nav).to_be_visible()
+
+    # Verify at least the Dashboard link is present
+    dashboard_link = mobile_sidebar.locator("a", has_text="Dashboard")
+    expect(dashboard_link).to_be_visible()
+
+
+# -- Simulate home page usable on mobile -----------------------------------
+
+
+def test_mobile_simulate_home_usable(page: Page, live_server: str) -> None:
+    """At 375px width, the /simulate/home form is visible and the submit
+    button is accessible (visible and not clipped off-screen).
+    """
+    page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
+
+    response = page.goto(live_server + "/simulate/home")
+    assert response is not None
+    assert response.status == 200
+
+    page.wait_for_load_state("networkidle")
+
+    # The page heading should be visible
+    heading = page.locator("text=Single Home Simulation").first
+    expect(heading).to_be_visible()
+
+    # The tab navigation should be visible (it has overflow-x-auto for
+    # horizontal scrolling on mobile)
+    tab_nav = page.locator('nav[aria-label="Configuration tabs"]')
+    expect(tab_nav).to_be_visible()
+
+    # The submit button should be in the DOM and reachable by scrolling
+    submit_btn = page.locator("button[type='submit']")
+    expect(submit_btn).to_be_attached()
+
+    # Scroll the submit button into view and verify it is visible
+    submit_btn.scroll_into_view_if_needed()
+    expect(submit_btn).to_be_visible()
+
+
+# -- History table scrollable on mobile ------------------------------------
+
+
+def test_mobile_history_table_scrollable(page: Page, live_server: str) -> None:
+    """At 375px width, the history table container has overflow-x-auto
+    to allow horizontal scrolling.
+    """
+    page.set_viewport_size({"width": MOBILE_WIDTH, "height": MOBILE_HEIGHT})
+
+    response = page.goto(live_server + "/history/runs")
+    assert response is not None
+    assert response.status == 200
+
+    page.wait_for_load_state("networkidle")
+
+    # The table is wrapped in a div with class "overflow-x-auto"
+    table_container = page.locator("div.overflow-x-auto").first
+    expect(table_container).to_be_visible()
+
+    # Verify the container has overflow-x set to 'auto' in computed styles
+    overflow_x = table_container.evaluate(
+        "el => window.getComputedStyle(el).overflowX"
+    )
+    assert overflow_x == "auto", (
+        f"Expected overflow-x: auto on table container, got '{overflow_x}'"
+    )

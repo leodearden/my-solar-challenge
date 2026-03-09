@@ -48,6 +48,10 @@ web = [
     "plotly>=5.0.0",
     "pyarrow>=10.0.0",
 ]
+e2e = [
+    "playwright>=1.40.0",
+    "pytest-playwright>=0.4.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -58,6 +62,7 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+markers = ["e2e: end-to-end browser tests (require playwright)"]
 
 [tool.mypy]
 python_version = "3.10"
