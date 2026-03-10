@@ -339,10 +339,12 @@ class TestExportAPI:
 class TestComparisonRoute:
     """Tests for the comparison page route."""
 
-    def test_compare_no_ids_redirects(self, client: FlaskClient) -> None:
-        """Test GET /history/compare with no IDs redirects to runs page."""
+    def test_compare_no_ids_shows_empty_state(self, client: FlaskClient) -> None:
+        """Test GET /history/compare with no IDs shows empty state page."""
         response = client.get("/history/compare")
-        assert response.status_code == 302
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+        assert "No Runs Selected" in html
 
     def test_compare_single_id_redirects(self, client: FlaskClient) -> None:
         """Test GET /history/compare with only 1 ID redirects to runs page."""
@@ -694,28 +696,29 @@ class TestContentDispositionHeader:
 class TestCompareWithoutIDs:
     """Tests for /history/compare redirect behavior without proper IDs."""
 
-    def test_compare_without_ids_redirects_to_runs(self, client: FlaskClient) -> None:
-        """Test GET /history/compare without IDs returns a redirect (not raw 400)."""
+    def test_compare_without_ids_shows_empty_state(self, client: FlaskClient) -> None:
+        """Test GET /history/compare without IDs returns empty state (not raw 400)."""
         response = client.get("/history/compare")
-        # Should redirect, not return a raw 400 error
-        assert response.status_code == 302
-        assert response.status_code != 400
-
-    def test_compare_without_ids_redirect_targets_runs_page(
-        self, client: FlaskClient
-    ) -> None:
-        """Test that /history/compare redirect location points to the runs page."""
-        response = client.get("/history/compare")
-        assert response.status_code == 302
-        location = response.headers.get("Location", "")
-        assert "/history/runs" in location
-
-    def test_compare_without_ids_follow_redirect_shows_flash(
-        self, client: FlaskClient
-    ) -> None:
-        """Test that following the redirect shows a friendly flash message."""
-        response = client.get("/history/compare", follow_redirects=True)
+        # Should render empty state page, not return a raw 400 error
         assert response.status_code == 200
         html = response.data.decode("utf-8")
-        # The flash message should inform user about selecting runs
-        assert "No run IDs provided" in html or "Select" in html or "runs" in html.lower()
+        assert "No Runs Selected" in html
+
+    def test_compare_without_ids_contains_link_to_runs_page(
+        self, client: FlaskClient
+    ) -> None:
+        """Test that /history/compare empty state contains link to runs page."""
+        response = client.get("/history/compare")
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+        assert "/history/runs" in html
+
+    def test_compare_without_ids_shows_helpful_message(
+        self, client: FlaskClient
+    ) -> None:
+        """Test that empty state page shows a helpful message about selecting runs."""
+        response = client.get("/history/compare")
+        assert response.status_code == 200
+        html = response.data.decode("utf-8")
+        # The empty state should inform user about selecting runs
+        assert "Select" in html or "simulation runs" in html.lower()

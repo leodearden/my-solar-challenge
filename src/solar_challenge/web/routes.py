@@ -35,7 +35,7 @@ def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
         cursor.execute("""
             SELECT
                 COUNT(*) as total_runs,
-                COALESCE(SUM(n_homes), 0) as total_homes
+                COALESCE(SUM(CASE WHEN n_homes IS NOT NULL AND n_homes > 0 THEN n_homes ELSE 1 END), 0) as total_homes
             FROM runs
             WHERE status = 'completed'
         """)

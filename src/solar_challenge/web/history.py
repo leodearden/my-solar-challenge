@@ -62,8 +62,12 @@ def compare_page() -> str | Response:
     """
     ids_param = request.args.get("ids", "")
     if not ids_param:
-        flash("No run IDs provided. Select 2-4 runs to compare.", "error")
-        return redirect(url_for("history.runs_page"))  # type: ignore[return-value]
+        return str(render_template(
+            "history/compare.html",
+            page="history-compare",
+            runs=[],
+            charts={},
+        ))
 
     run_ids = [rid.strip() for rid in ids_param.split(",") if rid.strip()]
     if len(run_ids) < 2:

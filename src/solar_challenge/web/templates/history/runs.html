@@ -64,20 +64,22 @@
     </div>
 
     {# Compare selected button #}
-    <div class="mb-4 flex items-center gap-3" x-show="selectedIds.length >= 2" x-cloak>
+    <div class="fixed bottom-6 right-6 z-30" x-show="selectedIds.length >= 2" x-cloak x-transition>
         <a
             :href="'/history/compare?ids=' + selectedIds.join(',')"
-            class="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-lg transition-colors shadow-sm"
+            class="inline-flex items-center gap-2 px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-lg transition-colors shadow-sm shadow-lg"
         >
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
                 <path d="M5 4a1 1 0 00-2 0v7.268a2 2 0 000 3.464V16a1 1 0 102 0v-1.268a2 2 0 000-3.464V4zM11 4a1 1 0 10-2 0v1.268a2 2 0 000 3.464V16a1 1 0 102 0V8.732a2 2 0 000-3.464V4zM16 3a1 1 0 011 1v7.268a2 2 0 010 3.464V16a1 1 0 11-2 0v-1.268a2 2 0 010-3.464V4a1 1 0 011-1z" />
             </svg>
             Compare Selected (<span x-text="selectedIds.length"></span>)
         </a>
-        <span class="text-xs text-slate-500 dark:text-slate-400">Select 2-4 runs to compare</span>
     </div>
 
     {# Runs table #}
+    <div class="relative hidden md:block">
+    <!-- Scroll gradient indicator (mobile) -->
+    <div class="absolute right-0 top-0 bottom-0 w-8 bg-gradient-to-l from-white dark:from-slate-800 to-transparent pointer-events-none md:hidden z-10"></div>
     <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
             <thead class="bg-slate-50 dark:bg-slate-700/50">
@@ -107,8 +109,8 @@
                         Duration
                         <span x-show="sort === 'duration_seconds'" x-cloak x-text="order === 'asc' ? ' ^' : ' v'" class="text-amber-500"></span>
                     </th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Generation</th>
-                    <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Self-Cons.</th>
+                    <th class="hidden xl:table-cell px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Generation</th>
+                    <th class="hidden xl:table-cell px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Self-Cons.</th>
                     <th class="px-4 py-3 text-left text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Status</th>
                     <th class="px-4 py-3 text-right text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Actions</th>
                 </tr>
@@ -191,11 +193,11 @@
                         {# Duration #}
                         <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap" x-text="formatDuration(run.duration_seconds)"></td>
                         {# Generation #}
-                        <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                        <td class="hidden xl:table-cell px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
                             <span x-text="run.total_generation_kwh != null ? run.total_generation_kwh.toFixed(1) + ' kWh' : '-'"></span>
                         </td>
                         {# Self-consumption ratio #}
-                        <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                        <td class="hidden xl:table-cell px-4 py-3 text-sm text-slate-600 dark:text-slate-300 whitespace-nowrap">
                             <span x-text="run.self_consumption_ratio != null ? (run.self_consumption_ratio * 100).toFixed(1) + '%' : '-'"></span>
                         </td>
                         {# Status badge #}
@@ -212,11 +214,11 @@
                         </td>
                         {# Actions #}
                         <td class="px-4 py-3 text-right whitespace-nowrap">
-                            <div class="flex items-center justify-end gap-1">
+                            <div class="flex items-center justify-end gap-0.5">
                                 {# View results #}
                                 <a
                                     :href="'/results/' + run.type + '/' + run.id"
-                                    class="p-1.5 rounded text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    class="p-1 rounded text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                                     title="View results"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -227,7 +229,7 @@
                                 {# Rename #}
                                 <button
                                     @click="startEdit(run)"
-                                    class="p-1.5 rounded text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    class="p-1 rounded text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                                     title="Rename"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -238,7 +240,7 @@
                                 <a
                                     :href="'/api/history/runs/' + run.id + '/export/csv'"
                                     @click="Alpine.store('toast').info('Exporting CSV...')"
-                                    class="p-1.5 rounded text-slate-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    class="p-1 rounded text-slate-400 hover:text-green-600 dark:hover:text-green-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                                     title="Export CSV"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -249,7 +251,7 @@
                                 <a
                                     :href="'/api/history/runs/' + run.id + '/export/yaml'"
                                     @click="Alpine.store('toast').info('Exporting YAML config...')"
-                                    class="p-1.5 rounded text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    class="p-1 rounded text-slate-400 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                                     title="Export Config YAML"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -259,7 +261,7 @@
                                 {# Delete #}
                                 <button
                                     @click="confirmDelete(run)"
-                                    class="p-1.5 rounded text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                                    class="p-1 rounded text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
                                     title="Delete"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
@@ -272,6 +274,40 @@
                 </template>
             </tbody>
         </table>
+    </div>
+    </div>
+
+    <!-- Mobile card layout -->
+    <div class="md:hidden space-y-3 mt-4">
+        <template x-for="run in runs" :key="run.id + '-card'">
+            <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-4">
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-medium text-slate-900 dark:text-white" x-text="run.name || 'Unnamed Run'"></span>
+                    <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
+                        :class="{
+                            'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400': run.status === 'completed',
+                            'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400': run.status === 'running',
+                            'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400': run.status === 'failed'
+                        }"
+                        x-text="run.status"></span>
+                </div>
+                <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mb-3">
+                    <span :class="{
+                        'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400': run.type === 'home',
+                        'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400': run.type === 'fleet',
+                        'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400': run.type === 'sweep'
+                    }" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium" x-text="run.type"></span>
+                    <span x-text="formatDate(run.created_at)"></span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <input type="checkbox" :value="run.id" :checked="selectedIds.includes(run.id)" @change="toggleSelect(run.id)" :disabled="!selectedIds.includes(run.id) && selectedIds.length >= 4" class="h-4 w-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500">
+                        <span class="text-xs text-slate-400">Compare</span>
+                    </div>
+                    <a :href="'/results/' + run.type + '/' + run.id" class="text-sm text-amber-600 dark:text-amber-400 hover:underline">View</a>
+                </div>
+            </div>
+        </template>
     </div>
 
     {# Pagination #}

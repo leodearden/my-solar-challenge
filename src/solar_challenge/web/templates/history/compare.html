@@ -7,6 +7,7 @@
 {% block content %}
 {{ page_header("Compare Runs", subtitle="Side-by-side comparison of selected simulation runs", breadcrumbs=[{"label": "History", "url": "/history/runs"}, {"label": "Compare"}]) }}
 
+{% if runs|length >= 2 %}
 <div x-data="{ activeTab: 'bar' }">
     {# Run header row with names and type badges #}
     <div class="grid gap-4 mb-6" style="grid-template-columns: repeat({{ runs|length }}, minmax(0, 1fr));">
@@ -25,12 +26,12 @@
 
     {# Summary metric cards with deltas #}
     {% set metrics = [
-        ("Total Generation", "total_generation_kwh", "kWh"),
-        ("Total Demand", "total_demand_kwh", "kWh"),
-        ("Self-Consumption", "total_self_consumption_kwh", "kWh"),
-        ("Grid Import", "total_grid_import_kwh", "kWh"),
-        ("Grid Export", "total_grid_export_kwh", "kWh"),
-        ("Self-Consumption Ratio", "self_consumption_ratio", "%"),
+        ("Total Generation", "total_generation_kwh", "kWh", true),
+        ("Total Demand", "total_demand_kwh", "kWh", none),
+        ("Self-Consumption", "total_self_consumption_kwh", "kWh", true),
+        ("Grid Import", "total_grid_import_kwh", "kWh", false),
+        ("Grid Export", "total_grid_export_kwh", "kWh", true),
+        ("Self-Consumption Ratio", "self_consumption_ratio", "%", true),
     ] %}
 
     <div class="mb-8">
@@ -50,7 +51,7 @@
                     </tr>
                 </thead>
                 <tbody class="bg-white dark:bg-slate-800 divide-y divide-slate-200 dark:divide-slate-700">
-                    {% for label, key, unit in metrics %}
+                    {% for label, key, unit, higher_is_better in metrics %}
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
                         <td class="px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300">{{ label }}</td>
                         {% for run in runs %}
@@ -71,14 +72,14 @@
                             {% if val_a is not none and val_b is not none %}
                                 {% set delta = val_b - val_a %}
                                 {% set pct = ((delta / val_a) * 100) if val_a != 0 else 0 %}
-                                <td class="px-4 py-3 text-sm text-right whitespace-nowrap {{ 'text-green-600 dark:text-green-400' if delta >= 0 else 'text-red-600 dark:text-red-400' }}">
+                                <td class="px-4 py-3 text-sm text-right whitespace-nowrap {% if higher_is_better is none %}text-slate-500 dark:text-slate-400{% elif (delta >= 0) == higher_is_better %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
                                     {% if unit == '%' %}
                                         {{ "%+.1f"|format(delta * 100) }} pp
                                     {% else %}
                                         {{ "%+.1f"|format(delta) }} {{ unit }}
                                     {% endif %}
                                 </td>
-                                <td class="px-4 py-3 text-sm text-right whitespace-nowrap {{ 'text-green-600 dark:text-green-400' if pct >= 0 else 'text-red-600 dark:text-red-400' }}">
+                                <td class="px-4 py-3 text-sm text-right whitespace-nowrap {% if higher_is_better is none %}text-slate-500 dark:text-slate-400{% elif (pct >= 0) == higher_is_better %}text-green-600 dark:text-green-400{% else %}text-red-600 dark:text-red-400{% endif %}">
                                     {{ "%+.1f"|format(pct) }}%
                                 </td>
                             {% else %}
@@ -151,6 +152,22 @@
         </a>
     </div>
 </div>
+
+{% else %}
+<div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg shadow-sm p-12 text-center">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-slate-300 dark:text-slate-600 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+    </svg>
+    <h2 class="text-xl font-semibold text-slate-700 dark:text-slate-300 mb-2">No Runs Selected</h2>
+    <p class="text-slate-500 dark:text-slate-400 mb-6">Select 2-4 simulation runs from the history page to compare their results side by side.</p>
+    <a href="/history/runs" class="inline-flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm rounded-lg transition-colors">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+            <path fill-rule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clip-rule="evenodd" />
+        </svg>
+        Go to Run History
+    </a>
+</div>
+{% endif %}
 
 {% endblock %}
 
