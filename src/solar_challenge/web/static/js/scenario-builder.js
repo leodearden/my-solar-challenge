@@ -31,11 +31,21 @@ document.addEventListener('alpine:init', () => {
         import_rate: 0.245,
         export_rate: 0.15,
 
+        // Weighted discrete / shuffled pool arrays
+        pv_wd_values: [{ value: 3.0, weight: 20 }, { value: 4.0, weight: 40 }, { value: 5.0, weight: 30 }],
+        pv_sp_entries: [{ value: 3.0, count: 20 }, { value: 4.0, count: 40 }, { value: 5.0, count: 30 }],
+        battery_wd_values: [{ value: 0, weight: 40 }, { value: 5.0, weight: 40 }, { value: 10.0, weight: 20 }],
+        battery_sp_entries: [{ value: 0, count: 40 }, { value: 5.0, count: 40 }, { value: 10.0, count: 20 }],
+        load_wd_values: [{ value: 2900, weight: 30 }, { value: 3500, weight: 40 }, { value: 4500, weight: 30 }],
+        load_sp_entries: [{ value: 2900, count: 30 }, { value: 3500, count: 40 }, { value: 4500, count: 30 }],
+
         // UI state
         yamlPreview: '# Configure your scenario...',
         validationResult: null,
         accordionOpen: 'general',
         presetDropdownOpen: false,
+        showSaveModal: false,
+        saveName: '',
         presets: [],
         debounceTimer: null,
 
@@ -99,8 +109,14 @@ document.addEventListener('alpine:init', () => {
 
         // Save scenario
         async saveScenario() {
-            const name = prompt('Enter a name for this scenario:', this.name || 'My Scenario');
+            this.saveName = this.name || 'My Scenario';
+            this.showSaveModal = true;
+        },
+
+        async doSave() {
+            const name = this.saveName.trim();
             if (!name) return;
+            this.showSaveModal = false;
             const formData = this.getFormData();
             try {
                 const resp = await fetch('/api/scenarios/save', {
@@ -136,12 +152,70 @@ document.addEventListener('alpine:init', () => {
             if (!file) return;
             const text = await file.text();
             this.yamlPreview = text;
-            // Try to parse and populate form
             try {
                 const parsed = (typeof jsyaml !== 'undefined') ? jsyaml.load(text) : null;
-                // Basic population from parsed YAML
-                if (parsed && parsed.name) this.name = parsed.name;
+                if (!parsed) return;
+                if (parsed.name) this.name = parsed.name;
+                if (parsed.description) this.description = parsed.description;
+                if (parsed.start_date) this.start_date = parsed.start_date;
+                if (parsed.end_date) this.end_date = parsed.end_date;
+                if (parsed.n_homes) this.n_homes = parsed.n_homes;
+                if (parsed.import_rate !== undefined) this.import_rate = parsed.import_rate;
+                if (parsed.export_rate !== undefined) this.export_rate = parsed.export_rate;
+                // Location
+                if (parsed.location) {
+                    if (parsed.location.latitude !== undefined) {
+                        this.location_preset = 'custom';
+                        this.latitude = parsed.location.latitude;
+                        this.longitude = parsed.location.longitude || -2.58;
+                        if (parsed.location.altitude !== undefined) this.altitude = parsed.location.altitude;
+                    }
+                }
+                // PV distribution
+                if (parsed.fleet_distribution && parsed.fleet_distribution.pv_capacity_kw) {
+                    var pv = parsed.fleet_distribution.pv_capacity_kw;
+                    if (typeof pv === 'number') {
+                        this.pv_distribution_type = '';
+                        this.pv_capacity_kw = pv;
+                    } else if (pv.type) {
+                        this.pv_distribution_type = pv.type;
+                        if (pv.mean !== undefined) this.pv_mean = pv.mean;
+                        if (pv.std !== undefined) this.pv_std = pv.std;
+                        if (pv.min !== undefined) this.pv_min = pv.min;
+                        if (pv.max !== undefined) this.pv_max = pv.max;
+                    }
+                }
+                // Battery distribution
+                if (parsed.fleet_distribution && parsed.fleet_distribution.battery_capacity_kwh) {
+                    var batt = parsed.fleet_distribution.battery_capacity_kwh;
+                    if (typeof batt === 'number') {
+                        this.battery_distribution_type = '';
+                        this.battery_capacity_kwh = batt;
+                    } else if (batt.type) {
+                        this.battery_distribution_type = batt.type;
+                        if (batt.mean !== undefined) this.battery_mean = batt.mean;
+                        if (batt.std !== undefined) this.battery_std = batt.std;
+                        if (batt.min !== undefined) this.battery_min = batt.min;
+                        if (batt.max !== undefined) this.battery_max = batt.max;
+                    }
+                }
+                // Load distribution
+                if (parsed.fleet_distribution && parsed.fleet_distribution.annual_consumption_kwh) {
+                    var load = parsed.fleet_distribution.annual_consumption_kwh;
+                    if (typeof load === 'number') {
+                        this.load_distribution_type = '';
+                        this.annual_consumption_kwh = load;
+                    } else if (load.type) {
+                        this.load_distribution_type = load.type;
+                        if (load.mean !== undefined) this.load_mean = load.mean;
+                        if (load.std !== undefined) this.load_std = load.std;
+                        if (load.min !== undefined) this.load_min = load.min;
+                        if (load.max !== undefined) this.load_max = load.max;
+                    }
+                }
+                this.updatePreview();
             } catch (e) { /* ignore parse errors */ }
+            event.target.value = '';
         },
 
         // Load presets list
@@ -194,7 +268,13 @@ document.addEventListener('alpine:init', () => {
                 data.longitude = this.longitude;
                 data.altitude = this.altitude;
             }
-            if (this.pv_distribution_type) {
+            if (this.pv_distribution_type === 'weighted_discrete') {
+                data.pv_distribution_type = 'weighted_discrete';
+                data.pv_wd_values = this.pv_wd_values;
+            } else if (this.pv_distribution_type === 'shuffled_pool') {
+                data.pv_distribution_type = 'shuffled_pool';
+                data.pv_sp_entries = this.pv_sp_entries;
+            } else if (this.pv_distribution_type) {
                 data.pv_distribution_type = this.pv_distribution_type;
                 data.pv_mean = this.pv_mean;
                 data.pv_std = this.pv_std;
@@ -203,7 +283,13 @@ document.addEventListener('alpine:init', () => {
             } else {
                 data.pv_capacity_kw = this.pv_capacity_kw;
             }
-            if (this.battery_distribution_type) {
+            if (this.battery_distribution_type === 'weighted_discrete') {
+                data.battery_distribution_type = 'weighted_discrete';
+                data.battery_wd_values = this.battery_wd_values;
+            } else if (this.battery_distribution_type === 'shuffled_pool') {
+                data.battery_distribution_type = 'shuffled_pool';
+                data.battery_sp_entries = this.battery_sp_entries;
+            } else if (this.battery_distribution_type) {
                 data.battery_distribution_type = this.battery_distribution_type;
                 data.battery_mean = this.battery_mean;
                 data.battery_std = this.battery_std;
@@ -212,7 +298,13 @@ document.addEventListener('alpine:init', () => {
             } else {
                 data.battery_capacity_kwh = this.battery_capacity_kwh;
             }
-            if (this.load_distribution_type) {
+            if (this.load_distribution_type === 'weighted_discrete') {
+                data.load_distribution_type = 'weighted_discrete';
+                data.load_wd_values = this.load_wd_values;
+            } else if (this.load_distribution_type === 'shuffled_pool') {
+                data.load_distribution_type = 'shuffled_pool';
+                data.load_sp_entries = this.load_sp_entries;
+            } else if (this.load_distribution_type) {
                 data.load_distribution_type = this.load_distribution_type;
                 data.load_mean = this.load_mean;
                 data.load_std = this.load_std;

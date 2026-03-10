@@ -155,6 +155,8 @@
                                 <option value="">Fixed Value</option>
                                 <option value="normal">Normal Distribution</option>
                                 <option value="uniform">Uniform Distribution</option>
+                                <option value="weighted_discrete">Weighted Discrete</option>
+                                <option value="shuffled_pool">Shuffled Pool</option>
                             </select>
                         </div>
                         <div x-show="!pv_distribution_type">
@@ -173,7 +175,7 @@
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
                         </div>
-                        <div x-show="pv_distribution_type" x-cloak class="grid grid-cols-2 gap-3">
+                        <div x-show="pv_distribution_type === 'normal' || pv_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
                                 <input type="number" step="0.1" x-model="pv_min" @input="updatePreview()"
@@ -184,6 +186,34 @@
                                 <input type="number" step="0.1" x-model="pv_max" @input="updatePreview()"
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
+                        </div>
+                        <div x-show="pv_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
+                            <template x-for="(item, idx) in pv_wd_values" :key="idx">
+                                <div class="flex gap-2 items-center">
+                                    <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
+                                        class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <input type="number" step="1" x-model.number="item.weight" @input="updatePreview()" placeholder="Weight"
+                                        class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <button type="button" @click="pv_wd_values.splice(idx, 1); updatePreview()" x-show="pv_wd_values.length > 1"
+                                        class="text-red-400 hover:text-red-600 text-sm">X</button>
+                                </div>
+                            </template>
+                            <button type="button" @click="pv_wd_values.push({value: 4.0, weight: 10}); updatePreview()"
+                                class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add value</button>
+                        </div>
+                        <div x-show="pv_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
+                            <template x-for="(item, idx) in pv_sp_entries" :key="idx">
+                                <div class="flex gap-2 items-center">
+                                    <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
+                                        class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <input type="number" step="1" x-model.number="item.count" @input="updatePreview()" placeholder="Count"
+                                        class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <button type="button" @click="pv_sp_entries.splice(idx, 1); updatePreview()" x-show="pv_sp_entries.length > 1"
+                                        class="text-red-400 hover:text-red-600 text-sm">X</button>
+                                </div>
+                            </template>
+                            <button type="button" @click="pv_sp_entries.push({value: 4.0, count: 10}); updatePreview()"
+                                class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add entry</button>
                         </div>
                     </div>
                 </div>
@@ -199,6 +229,8 @@
                                 <option value="">Fixed Value</option>
                                 <option value="normal">Normal Distribution</option>
                                 <option value="uniform">Uniform Distribution</option>
+                                <option value="weighted_discrete">Weighted Discrete</option>
+                                <option value="shuffled_pool">Shuffled Pool</option>
                             </select>
                         </div>
                         <div x-show="!battery_distribution_type">
@@ -217,7 +249,7 @@
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
                         </div>
-                        <div x-show="battery_distribution_type" x-cloak class="grid grid-cols-2 gap-3">
+                        <div x-show="battery_distribution_type === 'normal' || battery_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
                                 <input type="number" step="0.1" x-model="battery_min" @input="updatePreview()"
@@ -228,6 +260,34 @@
                                 <input type="number" step="0.1" x-model="battery_max" @input="updatePreview()"
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
+                        </div>
+                        <div x-show="battery_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
+                            <template x-for="(item, idx) in battery_wd_values" :key="idx">
+                                <div class="flex gap-2 items-center">
+                                    <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
+                                        class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <input type="number" step="1" x-model.number="item.weight" @input="updatePreview()" placeholder="Weight"
+                                        class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <button type="button" @click="battery_wd_values.splice(idx, 1); updatePreview()" x-show="battery_wd_values.length > 1"
+                                        class="text-red-400 hover:text-red-600 text-sm">X</button>
+                                </div>
+                            </template>
+                            <button type="button" @click="battery_wd_values.push({value: 5.0, weight: 10}); updatePreview()"
+                                class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add value</button>
+                        </div>
+                        <div x-show="battery_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
+                            <template x-for="(item, idx) in battery_sp_entries" :key="idx">
+                                <div class="flex gap-2 items-center">
+                                    <input type="number" step="0.1" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
+                                        class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <input type="number" step="1" x-model.number="item.count" @input="updatePreview()" placeholder="Count"
+                                        class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <button type="button" @click="battery_sp_entries.splice(idx, 1); updatePreview()" x-show="battery_sp_entries.length > 1"
+                                        class="text-red-400 hover:text-red-600 text-sm">X</button>
+                                </div>
+                            </template>
+                            <button type="button" @click="battery_sp_entries.push({value: 5.0, count: 10}); updatePreview()"
+                                class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add entry</button>
                         </div>
                     </div>
                 </div>
@@ -243,6 +303,8 @@
                                 <option value="">Fixed Value</option>
                                 <option value="normal">Normal Distribution</option>
                                 <option value="uniform">Uniform Distribution</option>
+                                <option value="weighted_discrete">Weighted Discrete</option>
+                                <option value="shuffled_pool">Shuffled Pool</option>
                             </select>
                         </div>
                         <div x-show="!load_distribution_type">
@@ -261,7 +323,7 @@
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
                         </div>
-                        <div x-show="load_distribution_type" x-cloak class="grid grid-cols-2 gap-3">
+                        <div x-show="load_distribution_type === 'normal' || load_distribution_type === 'uniform'" x-cloak class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1">Min</label>
                                 <input type="number" step="100" x-model="load_min" @input="updatePreview()"
@@ -272,6 +334,34 @@
                                 <input type="number" step="100" x-model="load_max" @input="updatePreview()"
                                     class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
                             </div>
+                        </div>
+                        <div x-show="load_distribution_type === 'weighted_discrete'" x-cloak class="space-y-2">
+                            <template x-for="(item, idx) in load_wd_values" :key="idx">
+                                <div class="flex gap-2 items-center">
+                                    <input type="number" step="100" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
+                                        class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <input type="number" step="1" x-model.number="item.weight" @input="updatePreview()" placeholder="Weight"
+                                        class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <button type="button" @click="load_wd_values.splice(idx, 1); updatePreview()" x-show="load_wd_values.length > 1"
+                                        class="text-red-400 hover:text-red-600 text-sm">X</button>
+                                </div>
+                            </template>
+                            <button type="button" @click="load_wd_values.push({value: 3500, weight: 10}); updatePreview()"
+                                class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add value</button>
+                        </div>
+                        <div x-show="load_distribution_type === 'shuffled_pool'" x-cloak class="space-y-2">
+                            <template x-for="(item, idx) in load_sp_entries" :key="idx">
+                                <div class="flex gap-2 items-center">
+                                    <input type="number" step="100" x-model.number="item.value" @input="updatePreview()" placeholder="Value"
+                                        class="flex-1 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <input type="number" step="1" x-model.number="item.count" @input="updatePreview()" placeholder="Count"
+                                        class="w-24 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm">
+                                    <button type="button" @click="load_sp_entries.splice(idx, 1); updatePreview()" x-show="load_sp_entries.length > 1"
+                                        class="text-red-400 hover:text-red-600 text-sm">X</button>
+                                </div>
+                            </template>
+                            <button type="button" @click="load_sp_entries.push({value: 3500, count: 10}); updatePreview()"
+                                class="text-xs text-amber-600 hover:text-amber-700 dark:text-amber-400">+ Add entry</button>
                         </div>
                     </div>
                 </div>
@@ -343,6 +433,48 @@
                 class="px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white text-sm font-medium rounded-lg transition-colors shadow-sm">
                 Save
             </button>
+        </div>
+
+        <!-- Save scenario modal -->
+        <div x-show="showSaveModal" x-cloak
+             x-transition:enter="transition ease-out duration-200"
+             x-transition:enter-start="opacity-0"
+             x-transition:enter-end="opacity-100"
+             x-transition:leave="transition ease-in duration-150"
+             x-transition:leave-start="opacity-100"
+             x-transition:leave-end="opacity-0"
+             class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+             @click.self="showSaveModal = false"
+             @keydown.escape.window="showSaveModal = false"
+        >
+            <div x-transition:enter="transition ease-out duration-200"
+                 x-transition:enter-start="opacity-0 scale-95"
+                 x-transition:enter-end="opacity-100 scale-100"
+                 x-transition:leave="transition ease-in duration-150"
+                 x-transition:leave-start="opacity-100 scale-100"
+                 x-transition:leave-end="opacity-0 scale-95"
+                 class="bg-white dark:bg-slate-800 rounded-xl shadow-xl p-6 max-w-sm mx-4 w-full"
+                 @click.stop
+            >
+                <h3 class="text-lg font-semibold text-slate-900 dark:text-white mb-4">Save Scenario</h3>
+                <div class="space-y-1.5 mb-6">
+                    <label for="save_name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Scenario Name</label>
+                    <input type="text" id="save_name" x-model="saveName"
+                        @keydown.enter="doSave()"
+                        x-ref="saveNameInput"
+                        class="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 px-3 py-2 text-sm focus:ring-2 focus:ring-amber-500 focus:border-amber-500">
+                </div>
+                <div class="flex justify-end gap-3">
+                    <button @click="showSaveModal = false"
+                            class="px-4 py-2 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">
+                        Cancel
+                    </button>
+                    <button @click="doSave()"
+                            class="px-4 py-2 rounded-lg text-sm font-medium bg-sky-500 hover:bg-sky-600 text-white transition-colors">
+                        Save
+                    </button>
+                </div>
+            </div>
         </div>
 
         <!-- Validation Result -->

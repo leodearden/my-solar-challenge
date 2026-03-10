@@ -5,6 +5,13 @@ document.addEventListener('alpine:init', () => {
         jobId: null,
         runId: null,
         errorMsg: '',
+        simName: '',
+
+        /* ---- Period state ---- */
+        periodMode: 'preset',
+        periodDays: 30,
+        startDate: '2024-06-01',
+        endDate: '2024-06-30',
 
         /* ---- Progress tracking state ---- */
         progress: 0,
@@ -136,6 +143,7 @@ document.addEventListener('alpine:init', () => {
         /* ---- Build payload from current state ---- */
         buildPayload() {
             const payload = {
+                name: this.simName || 'Fleet Simulation',
                 n_homes: parseInt(this.n_homes),
                 seed: 42,
                 pv: { capacity_kw: this._buildDistPayload(this.pvDist) },
@@ -143,6 +151,12 @@ document.addEventListener('alpine:init', () => {
             };
             if (this.batteryEnabled) {
                 payload.battery = { capacity_kwh: this._buildDistPayload(this.batteryDist) };
+            }
+            if (this.periodMode === 'preset') {
+                payload.days = parseInt(this.periodDays);
+            } else {
+                payload.start = this.startDate;
+                payload.end = this.endDate;
             }
             return payload;
         },
