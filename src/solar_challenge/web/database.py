@@ -2,6 +2,13 @@
 
 Provides schema initialization and connection management for storing
 simulation runs, background jobs, chat messages, and configuration presets.
+
+Schema migration strategy:
+    There is currently no automated migration framework.  When the schema
+    changes (new columns, altered constraints, etc.), delete the database
+    file (default ``~/.solar-challenge/solar-challenge.db``) and restart
+    the application.  The ``init_db()`` function will recreate all tables
+    from scratch using ``CREATE TABLE IF NOT EXISTS``.
 """
 
 import sqlite3

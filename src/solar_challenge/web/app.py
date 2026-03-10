@@ -44,6 +44,13 @@ def create_app(test_config: dict | None = None) -> Flask:
     Uses the application factory pattern to allow multiple instances
     and easy testing with different configurations.
 
+    .. note::
+        This application requires single-worker deployment because the
+        JobManager uses in-memory state (job tracking dicts and SSE event
+        queues) that is not shared across processes.  Multi-worker
+        deployment (e.g. ``gunicorn -w 2+``) will cause jobs to appear
+        missing from workers that did not create them.
+
     Args:
         test_config: Optional configuration dict to override defaults.
             Useful for testing.
