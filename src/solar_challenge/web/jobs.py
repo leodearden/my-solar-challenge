@@ -412,6 +412,14 @@ class JobManager:
             if job_id in self._event_queues:
                 self._event_queues[job_id].append(event)
 
+    def _emit_event(self, job_id: str, event_type: str, data: dict[str, Any]) -> None:
+        """Update in-memory job state and append an SSE event."""
+        with self._lock:
+            if job_id in self._jobs:
+                self._jobs[job_id].update(data)
+            if job_id in self._event_queues:
+                self._event_queues[job_id].append({"event": event_type, "data": data})
+
     def _run_job(
         self,
         job_id: str,
@@ -420,87 +428,41 @@ class JobManager:
         work_fn: Callable[[sqlite3.Connection, Callable[[float, str, str], None]], None],
         success_message: str = "Simulation completed successfully",
     ) -> None:
-        """Common job lifecycle wrapper.
-
-        Handles: DB connection management, status transitions
-        (queued -> running -> completed/failed), progress tracking,
-        SSE events, and error handling.
-
-        Args:
-            job_id: Unique job identifier.
-            run_id: Unique run identifier.
-            db_path: Path to the SQLite database file.
-            work_fn: Callable receiving (conn, progress_callback) that
-                performs the actual simulation work.
-            success_message: Message stored on successful completion.
-        """
+        """Common job lifecycle wrapper for DB, status, progress, SSE, and errors."""
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         try:
-            # Transition to running
             self._update_progress(job_id, 5.0, "Starting", "Initializing...", db_path, "running", conn=conn)
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?",
-                (datetime.now(timezone.utc).isoformat(), job_id),
-            )
+            conn.execute("UPDATE jobs SET status='running', started_at=? WHERE id=?",
+                         (datetime.now(timezone.utc).isoformat(), job_id))
             conn.commit()
 
-            # Execute the actual work
-            def progress_callback(pct: float, step: str, message: str) -> None:
-                self._update_progress(job_id, pct, step, message, db_path, conn=conn)
+            def progress(pct: float, step: str, msg: str) -> None:
+                self._update_progress(job_id, pct, step, msg, db_path, conn=conn)
 
-            work_fn(conn, progress_callback)
+            work_fn(conn, progress)
 
-            # Mark completed
-            completed_at = datetime.now(timezone.utc).isoformat()
-            cursor = conn.cursor()
-            cursor.execute(
-                """UPDATE jobs SET status = 'completed', progress_pct = 100.0,
-                   current_step = 'Done', message = ?, completed_at = ? WHERE id = ?""",
-                (success_message, completed_at, job_id),
-            )
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute("UPDATE jobs SET status='completed', progress_pct=100.0, "
+                         "current_step='Done', message=?, completed_at=? WHERE id=?",
+                         (success_message, now, job_id))
             conn.commit()
-
-            with self._lock:
-                if job_id in self._jobs:
-                    self._jobs[job_id].update({
-                        "status": "completed", "progress_pct": 100.0,
-                        "current_step": "Done", "message": success_message,
-                    })
-                if job_id in self._event_queues:
-                    self._event_queues[job_id].append({
-                        "event": "complete",
-                        "data": {"status": "completed", "run_id": run_id},
-                    })
-
+            self._emit_event(job_id, "complete", {
+                "status": "completed", "progress_pct": 100.0,
+                "current_step": "Done", "message": success_message, "run_id": run_id,
+            })
         except Exception as exc:
-            error_tb = traceback.format_exc()
-            error_msg = str(exc)
-            completed_at = datetime.now(timezone.utc).isoformat()
+            error_msg, now = str(exc), datetime.now(timezone.utc).isoformat()
             try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE jobs SET status='failed', message=?, error_traceback=?, completed_at=? WHERE id=?",
-                    (error_msg, error_tb, completed_at, job_id),
-                )
-                cursor.execute(
-                    "UPDATE runs SET status='failed', error_message=?, completed_at=? WHERE id=?",
-                    (error_msg, completed_at, run_id),
-                )
+                conn.execute("UPDATE jobs SET status='failed', message=?, error_traceback=?, completed_at=? WHERE id=?",
+                             (error_msg, traceback.format_exc(), now, job_id))
+                conn.execute("UPDATE runs SET status='failed', error_message=?, completed_at=? WHERE id=?",
+                             (error_msg, now, run_id))
                 conn.commit()
             except Exception:
-                pass  # DB update failed, but we still update in-memory
-
-            with self._lock:
-                if job_id in self._jobs:
-                    self._jobs[job_id].update({"status": "failed", "message": error_msg})
-                if job_id in self._event_queues:
-                    self._event_queues[job_id].append({
-                        "event": "error",
-                        "data": {"status": "failed", "message": error_msg},
-                    })
+                pass
+            self._emit_event(job_id, "error", {"status": "failed", "message": error_msg})
         finally:
             conn.close()
 
