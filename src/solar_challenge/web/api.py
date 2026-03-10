@@ -1,16 +1,19 @@
 """Flask Blueprint providing JSON API endpoints for background simulations.
 
 Provides REST endpoints for submitting simulation jobs, polling status,
-streaming progress via SSE, and retrieving results.
+streaming progress via SSE, retrieving results, and consolidated history
+and scenarios API endpoints under the /api/ prefix.
 """
 
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any, Generator
 
 logger = logging.getLogger(__name__)
 
+import yaml as _yaml
 import pandas as pd
 from flask import Blueprint, Response, current_app, jsonify, request, stream_with_context
 
@@ -18,7 +21,8 @@ from solar_challenge.battery import BatteryConfig
 from solar_challenge.home import HomeConfig
 from solar_challenge.load import LoadConfig
 from solar_challenge.pv import PVConfig
-from solar_challenge.web.shared import resolve_location
+from solar_challenge.web.database import get_db
+from solar_challenge.web.shared import get_storage, resolve_location
 
 api_bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -29,12 +33,14 @@ def _get_job_manager() -> Any:
     Returns:
         JobManager instance.
 
-    Raises:
-        RuntimeError: If JobManager is not initialized.
+    Aborts:
+        503: If JobManager is not initialized.
     """
+    from flask import abort  # noqa: PLC0415
+
     jm = current_app.extensions.get("job_manager")
     if jm is None:
-        raise RuntimeError("JobManager not initialized")
+        abort(503, description="Simulation service is not available")
     return jm
 
 
@@ -314,8 +320,6 @@ def get_job_results(job_id: str) -> tuple[Response, int]:
     run_id = status.get("run_id", "")
     db_path = current_app.config["DATABASE"]
 
-    from solar_challenge.web.database import get_db
-
     with get_db(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT summary_json, name, type, created_at FROM runs WHERE id = ?", (run_id,))
@@ -406,9 +410,21 @@ def save_preset() -> tuple[Response, int]:
         with get_db(db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT OR REPLACE INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                (preset_id, name, preset_type, json.dumps(config_payload), now),
+                "SELECT id FROM config_presets WHERE name = ? AND type = ?",
+                (name, preset_type),
             )
+            existing = cursor.fetchone()
+            if existing:
+                cursor.execute(
+                    "UPDATE config_presets SET config_json = ?, created_at = ? WHERE id = ?",
+                    (json.dumps(config_payload), now, existing["id"]),
+                )
+                preset_id = existing["id"]
+            else:
+                cursor.execute(
+                    "INSERT INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (preset_id, name, preset_type, json.dumps(config_payload), now),
+                )
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": str(exc)}), 500
     return jsonify({"name": name, "id": preset_id}), 201
@@ -654,3 +670,651 @@ def simulate_sweep() -> tuple[Response, int]:
         "values": rounded_values,
         "job_ids": job_ids,
     }), 201
+
+
+# ---------------------------------------------------------------------------
+# History API endpoints (consolidated from history.py)
+# ---------------------------------------------------------------------------
+
+
+@api_bp.route("/history/runs")  # type: ignore[untyped-decorator]
+def history_list_runs() -> Response:
+    """Paginated, filterable run list API.
+
+    Query parameters:
+        page: Page number (default 1)
+        per_page: Items per page (default 20)
+        sort: Sort column (default 'created_at')
+        order: Sort order 'asc' or 'desc' (default 'desc')
+        type: Filter by run type (home, fleet, sweep)
+        q: Search query (searches name and notes)
+        date_from: Filter runs created on or after this date
+        date_to: Filter runs created on or before this date
+
+    Returns:
+        JSON response with ``runs`` list and ``pagination`` metadata.
+    """
+    page = request.args.get("page", 1, type=int)
+    per_page = request.args.get("per_page", 20, type=int)
+    sort_col = request.args.get("sort", "created_at")
+    order = request.args.get("order", "desc")
+    run_type = request.args.get("type")
+    search_q = request.args.get("q")
+    date_from = request.args.get("date_from")
+    date_to = request.args.get("date_to")
+
+    # Clamp per_page
+    per_page = max(1, min(per_page, 100))
+    page = max(1, page)
+
+    # Whitelist sort columns to prevent injection
+    allowed_sorts = {"created_at", "name", "type", "status", "duration_seconds", "n_homes"}
+    if sort_col not in allowed_sorts:
+        sort_col = "created_at"
+
+    order_dir = "ASC" if order.lower() == "asc" else "DESC"
+
+    db_path = current_app.config["DATABASE"]
+
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+
+        # Build WHERE clause
+        conditions: list[str] = []
+        params: list[Any] = []
+
+        if run_type:
+            conditions.append("type = ?")
+            params.append(run_type)
+
+        if search_q:
+            conditions.append("(name LIKE ? OR notes LIKE ?)")
+            like_q = f"%{search_q}%"
+            params.extend([like_q, like_q])
+
+        if date_from:
+            conditions.append("created_at >= ?")
+            params.append(date_from)
+
+        if date_to:
+            conditions.append("created_at <= ?")
+            params.append(date_to + "T23:59:59")
+
+        where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+        # Count total matching rows
+        count_query = f"SELECT COUNT(*) as cnt FROM runs WHERE {where_clause}"
+        cursor.execute(count_query, params)
+        total = cursor.fetchone()["cnt"]
+
+        # Fetch paginated results
+        offset = (page - 1) * per_page
+        data_query = (
+            f"SELECT id, name, type, status, created_at, completed_at, "
+            f"duration_seconds, n_homes, notes, summary_json "
+            f"FROM runs WHERE {where_clause} "
+            f"ORDER BY {sort_col} {order_dir} "
+            f"LIMIT ? OFFSET ?"
+        )
+        cursor.execute(data_query, params + [per_page, offset])
+        rows = cursor.fetchall()
+
+    # Build response
+    runs_list: list[dict[str, Any]] = []
+    for row in rows:
+        run_dict = dict(row)
+        # Parse summary_json to extract key metrics for the table
+        summary = {}
+        if run_dict.get("summary_json"):
+            try:
+                summary = json.loads(run_dict["summary_json"])
+            except (json.JSONDecodeError, TypeError):
+                pass
+        run_dict["total_generation_kwh"] = summary.get("total_generation_kwh")
+        run_dict["self_consumption_ratio"] = summary.get("self_consumption_ratio")
+        # Remove the full JSON from the list response to save bandwidth
+        run_dict.pop("summary_json", None)
+        runs_list.append(run_dict)
+
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    return jsonify({
+        "runs": runs_list,
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1,
+        },
+    })
+
+
+@api_bp.route("/history/runs/<run_id>")  # type: ignore[untyped-decorator]
+def history_get_run(run_id: str) -> Response | tuple[Response, int]:
+    """Get full run detail including summary and config.
+
+    Args:
+        run_id: Unique run identifier.
+
+    Returns:
+        JSON response with full run detail, or 404 if not found.
+    """
+    db_path = current_app.config["DATABASE"]
+
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
+        row = cursor.fetchone()
+
+    if row is None:
+        return jsonify({"error": "Run not found"}), 404
+
+    run_dict = dict(row)
+
+    # Parse JSON fields
+    for field in ("config_json", "summary_json"):
+        raw = run_dict.get(field)
+        if raw:
+            try:
+                run_dict[field.replace("_json", "")] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                run_dict[field.replace("_json", "")] = {}
+
+    return jsonify(run_dict)
+
+
+@api_bp.route("/history/runs/<run_id>", methods=["DELETE"])  # type: ignore[untyped-decorator]
+def history_delete_run(run_id: str) -> Response | tuple[Response, int]:
+    """Delete a run and its associated files.
+
+    Args:
+        run_id: Unique run identifier.
+
+    Returns:
+        JSON success response, or 404 if not found.
+    """
+    db_path = current_app.config["DATABASE"]
+
+    # Check if run exists first
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM runs WHERE id = ?", (run_id,))
+        row = cursor.fetchone()
+
+    if row is None:
+        return jsonify({"error": "Run not found"}), 404
+
+    storage = get_storage()
+    storage.delete_run(run_id)
+    return jsonify({"success": True, "message": f"Run {run_id} deleted"})
+
+
+@api_bp.route("/history/runs/<run_id>", methods=["PATCH"])  # type: ignore[untyped-decorator]
+def history_patch_run(run_id: str) -> Response | tuple[Response, int]:
+    """Update a run's name and/or notes.
+
+    Expects a JSON body with optional ``name`` and ``notes`` fields.
+
+    Args:
+        run_id: Unique run identifier.
+
+    Returns:
+        JSON response with updated run data, or 404 if not found.
+    """
+    db_path = current_app.config["DATABASE"]
+    data = request.get_json(silent=True) or {}
+
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM runs WHERE id = ?", (run_id,))
+        row = cursor.fetchone()
+
+        if row is None:
+            return jsonify({"error": "Run not found"}), 404
+
+        updates: list[str] = []
+        params: list[Any] = []
+
+        if "name" in data:
+            updates.append("name = ?")
+            params.append(data["name"])
+
+        if "notes" in data:
+            updates.append("notes = ?")
+            params.append(data["notes"])
+
+        if not updates:
+            return jsonify({"error": "No fields to update"}), 400
+
+        params.append(run_id)
+        set_clause = ", ".join(updates)
+        cursor.execute(f"UPDATE runs SET {set_clause} WHERE id = ?", params)
+
+        # Return updated row
+        cursor.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
+        updated_row = cursor.fetchone()
+
+    return jsonify(dict(updated_row))
+
+
+@api_bp.route("/history/runs/<run_id>/export/csv")  # type: ignore[untyped-decorator]
+def history_export_csv(run_id: str) -> Response | tuple[Response, int]:
+    """Export run results as CSV download.
+
+    Args:
+        run_id: Unique run identifier.
+
+    Returns:
+        CSV file response, or 404 if not found.
+    """
+    db_path = current_app.config["DATABASE"]
+
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, type FROM runs WHERE id = ?", (run_id,))
+        row = cursor.fetchone()
+
+    if row is None:
+        return jsonify({"error": "Run not found"}), 404
+
+    storage = get_storage()
+    run_type = row["type"]
+    run_name = row["name"] or "run"
+
+    try:
+        if run_type == "home":
+            _config, results, _summary = storage.load_home_run(run_id)
+            df = results.to_dataframe()
+        else:
+            # For fleet runs, export the aggregate (sum across all homes)
+            fleet_results, _fleet_summary, _per_home = storage.load_fleet_run(run_id)
+            if fleet_results.per_home_results:
+                df = fleet_results.to_aggregate_dataframe()
+            else:
+                return jsonify({"error": "No data to export"}), 404
+    except FileNotFoundError:
+        return jsonify({"error": "Run data files not found"}), 404
+
+    csv_data = df.to_csv()
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in run_name)
+    filename = f"{safe_name}_{run_id[:8]}.csv"
+
+    return Response(
+        csv_data,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@api_bp.route("/history/runs/<run_id>/export/yaml")  # type: ignore[untyped-decorator]
+def history_export_yaml(run_id: str) -> Response | tuple[Response, int]:
+    """Export run config as YAML download.
+
+    Args:
+        run_id: Unique run identifier.
+
+    Returns:
+        YAML file response, or 404 if not found.
+    """
+    db_path = current_app.config["DATABASE"]
+
+    with get_db(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name, config_json FROM runs WHERE id = ?", (run_id,))
+        row = cursor.fetchone()
+
+    if row is None:
+        return jsonify({"error": "Run not found"}), 404
+
+    config_json = row["config_json"]
+    if not config_json:
+        return jsonify({"error": "No config data available"}), 404
+
+    try:
+        config_dict = json.loads(config_json)
+    except (json.JSONDecodeError, TypeError):
+        return jsonify({"error": "Invalid config data"}), 500
+
+    # Convert to YAML format
+    yaml_data = _yaml.dump(config_dict, default_flow_style=False, sort_keys=False)
+
+    run_name = row["name"] or "run"
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in run_name)
+    filename = f"{safe_name}_{run_id[:8]}.yaml"
+
+    return Response(
+        yaml_data,
+        mimetype="text/yaml",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scenarios API endpoints (consolidated from scenarios.py)
+# ---------------------------------------------------------------------------
+
+
+def _scenarios_dir() -> Path:
+    """Return the path to the project-level scenarios/ directory.
+
+    Returns:
+        Path to the scenarios directory (may not exist).
+    """
+    return Path(__file__).resolve().parents[3] / "scenarios"
+
+
+def _form_to_yaml_dict(data: dict[str, Any]) -> dict[str, Any]:
+    """Convert form/JSON data into a scenario YAML-compatible dict.
+
+    Args:
+        data: Parsed request data from the builder form.
+
+    Returns:
+        Dictionary suitable for YAML serialisation.
+    """
+    from solar_challenge.web.shared import location_presets_as_dicts  # noqa: PLC0415
+
+    result: dict[str, Any] = {}
+
+    # General section
+    if data.get("name"):
+        result["name"] = str(data["name"])
+    if data.get("description"):
+        result["description"] = str(data["description"])
+
+    # Location section
+    location: dict[str, Any] = {}
+    loc_preset = data.get("location_preset", "")
+    if loc_preset == "custom":
+        location["latitude"] = float(data.get("latitude", 51.45))
+        location["longitude"] = float(data.get("longitude", -2.58))
+        if data.get("altitude"):
+            location["altitude"] = float(data["altitude"])
+    elif loc_preset:
+        presets = location_presets_as_dicts()
+        location = dict(presets.get(loc_preset, presets["bristol"]))
+    location["timezone"] = "Europe/London"
+    if location:
+        result["location"] = location
+
+    # Period section
+    if data.get("start_date"):
+        result["start_date"] = str(data["start_date"])
+    if data.get("end_date"):
+        result["end_date"] = str(data["end_date"])
+
+    # Fleet distribution section
+    fleet: dict[str, Any] = {}
+    if data.get("n_homes"):
+        fleet["n_homes"] = int(data["n_homes"])
+
+    # PV distribution
+    pv: dict[str, Any] = {}
+    if data.get("pv_capacity_kw"):
+        pv["capacity_kw"] = float(data["pv_capacity_kw"])
+    elif data.get("pv_distribution_type"):
+        pv["capacity_kw"] = {
+            "type": data["pv_distribution_type"],
+        }
+        if data.get("pv_mean"):
+            pv["capacity_kw"]["mean"] = float(data["pv_mean"])
+        if data.get("pv_std"):
+            pv["capacity_kw"]["std"] = float(data["pv_std"])
+        if data.get("pv_min"):
+            pv["capacity_kw"]["min"] = float(data["pv_min"])
+        if data.get("pv_max"):
+            pv["capacity_kw"]["max"] = float(data["pv_max"])
+    if pv:
+        fleet["pv"] = pv
+
+    # Battery distribution
+    battery: dict[str, Any] = {}
+    if data.get("battery_capacity_kwh"):
+        battery["capacity_kwh"] = float(data["battery_capacity_kwh"])
+    elif data.get("battery_distribution_type"):
+        battery["capacity_kwh"] = {
+            "type": data["battery_distribution_type"],
+        }
+        if data.get("battery_mean"):
+            battery["capacity_kwh"]["mean"] = float(data["battery_mean"])
+        if data.get("battery_std"):
+            battery["capacity_kwh"]["std"] = float(data["battery_std"])
+        if data.get("battery_min"):
+            battery["capacity_kwh"]["min"] = float(data["battery_min"])
+        if data.get("battery_max"):
+            battery["capacity_kwh"]["max"] = float(data["battery_max"])
+    if battery:
+        fleet["battery"] = battery
+
+    # Load distribution
+    load: dict[str, Any] = {}
+    if data.get("annual_consumption_kwh"):
+        load["annual_consumption_kwh"] = float(data["annual_consumption_kwh"])
+    elif data.get("load_distribution_type"):
+        load["annual_consumption_kwh"] = {
+            "type": data["load_distribution_type"],
+        }
+        if data.get("load_mean"):
+            load["annual_consumption_kwh"]["mean"] = float(data["load_mean"])
+        if data.get("load_std"):
+            load["annual_consumption_kwh"]["std"] = float(data["load_std"])
+        if data.get("load_min"):
+            load["annual_consumption_kwh"]["min"] = float(data["load_min"])
+        if data.get("load_max"):
+            load["annual_consumption_kwh"]["max"] = float(data["load_max"])
+    if load:
+        fleet["load"] = load
+
+    if fleet:
+        result["fleet_distribution"] = fleet
+
+    # Tariff section
+    tariff: dict[str, Any] = {}
+    if data.get("import_rate"):
+        tariff["import_rate"] = float(data["import_rate"])
+    if data.get("export_rate"):
+        tariff["export_rate"] = float(data["export_rate"])
+    if tariff:
+        result["tariff"] = tariff
+
+    return result
+
+
+@api_bp.route("/scenarios/preview-yaml", methods=["POST"])  # type: ignore[untyped-decorator]
+def scenarios_preview_yaml() -> tuple[Response, int]:
+    """Convert form data to a YAML string preview.
+
+    Expects a JSON body with scenario builder form fields.
+
+    Returns:
+        JSON with ``yaml`` string, HTTP 200 on success.
+    """
+    data = request.get_json(silent=True) or {}
+    scenario_dict = _form_to_yaml_dict(data)
+    yaml_str = _yaml.dump(scenario_dict, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    return jsonify({"yaml": yaml_str}), 200
+
+
+@api_bp.route("/scenarios/validate", methods=["POST"])  # type: ignore[untyped-decorator]
+def scenarios_validate_scenario() -> tuple[Response, int]:
+    """Validate scenario data against basic rules.
+
+    Expects a JSON body with scenario fields. Performs lightweight
+    validation (not a full ScenarioConfig parse since the form data
+    may be incomplete).
+
+    Returns:
+        JSON with ``valid`` boolean and optional ``errors`` list, HTTP 200.
+    """
+    data = request.get_json(silent=True) or {}
+    errors: list[str] = []
+
+    if not data.get("name"):
+        errors.append("Scenario name is required.")
+
+    n_homes = data.get("n_homes")
+    if n_homes is not None:
+        try:
+            n = int(n_homes)
+            if n < 1 or n > 10000:
+                errors.append("Number of homes must be between 1 and 10,000.")
+        except (ValueError, TypeError):
+            errors.append("Number of homes must be an integer.")
+
+    pv_kw = data.get("pv_capacity_kw")
+    if pv_kw is not None:
+        try:
+            kw = float(pv_kw)
+            if kw < 0.5 or kw > 20.0:
+                errors.append("PV capacity must be between 0.5 and 20 kW.")
+        except (ValueError, TypeError):
+            errors.append("PV capacity must be a number.")
+
+    if errors:
+        return jsonify({"valid": False, "errors": errors}), 200
+    return jsonify({"valid": True, "errors": []}), 200
+
+
+@api_bp.route("/scenarios/save", methods=["POST"])  # type: ignore[untyped-decorator]
+def scenarios_save_scenario() -> tuple[Response, int]:
+    """Save a scenario configuration to the config_presets table.
+
+    Expects a JSON body with at least ``name`` and ``config`` fields.
+
+    Returns:
+        JSON confirmation with preset name and id, HTTP 201 on success.
+    """
+    import uuid  # noqa: PLC0415
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Request body must be JSON"}), 400
+    name = str(data.get("name", "")).strip()
+    if not name:
+        return jsonify({"error": "Scenario name is required"}), 400
+    config_payload = data.get("config", {})
+    if not config_payload:
+        # Accept flat form data as config
+        config_payload = {k: v for k, v in data.items() if k not in ("name", "type")}
+
+    db_path = current_app.config["DATABASE"]
+    preset_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+
+    try:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id FROM config_presets WHERE name = ? AND type = ?",
+                (name, "fleet"),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                cursor.execute(
+                    "UPDATE config_presets SET config_json = ?, created_at = ? WHERE id = ?",
+                    (json.dumps(config_payload), now, existing["id"]),
+                )
+                preset_id = existing["id"]
+            else:
+                cursor.execute(
+                    "INSERT INTO config_presets (id, name, type, config_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (preset_id, name, "fleet", json.dumps(config_payload), now),
+                )
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+    return jsonify({"name": name, "id": preset_id}), 201
+
+
+@api_bp.route("/scenarios/presets", methods=["GET"])  # type: ignore[untyped-decorator]
+def scenarios_list_presets() -> tuple[Response, int]:
+    """List built-in (from scenarios/ dir) and saved scenario presets.
+
+    Returns:
+        JSON with ``presets`` array containing built-in and saved items.
+    """
+    presets: list[dict[str, Any]] = []
+
+    # Built-in presets from scenarios/ directory
+    scenarios_dir = _scenarios_dir()
+    if scenarios_dir.is_dir():
+        for path in sorted(scenarios_dir.iterdir()):
+            if path.suffix in (".yaml", ".yml") and path.is_file():
+                presets.append({
+                    "name": path.stem,
+                    "source": "builtin",
+                    "filename": path.name,
+                })
+
+    # Saved presets from database
+    db_path = current_app.config["DATABASE"]
+    try:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, config_json, created_at FROM config_presets WHERE type = 'fleet' ORDER BY name"
+            )
+            for row in cursor.fetchall():
+                presets.append({
+                    "name": row["name"],
+                    "source": "saved",
+                    "created_at": row["created_at"],
+                })
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to load saved scenario presets", exc_info=True)
+
+    return jsonify({"presets": presets}), 200
+
+
+@api_bp.route("/scenarios/presets/<name>", methods=["GET"])  # type: ignore[untyped-decorator]
+def scenarios_get_preset(name: str) -> tuple[Response, int]:
+    """Load a specific preset by name (from file or DB).
+
+    Checks the scenarios/ directory first for built-in YAML files,
+    then falls back to saved presets in the database.
+
+    Args:
+        name: The preset name to look up.
+
+    Returns:
+        JSON preset object, or 404 if not found.
+    """
+    # Try built-in scenarios directory
+    scenarios_dir = _scenarios_dir()
+    for suffix in (".yaml", ".yml"):
+        path = scenarios_dir / f"{name}{suffix}"
+        if path.is_file():
+            try:
+                content = _yaml.safe_load(path.read_text())
+                return jsonify({
+                    "name": name,
+                    "source": "builtin",
+                    "config": content,
+                }), 200
+            except Exception as exc:  # noqa: BLE001
+                return jsonify({"error": f"Failed to parse {path.name}: {exc}"}), 500
+    # Try database
+    db_path = current_app.config["DATABASE"]
+    try:
+        with get_db(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, config_json, created_at FROM config_presets WHERE name = ?",
+                (name,),
+            )
+            row = cursor.fetchone()
+
+        if row:
+            cfg = json.loads(row["config_json"]) if row["config_json"] else {}
+            return jsonify({
+                "name": row["name"],
+                "source": "saved",
+                "config": cfg,
+                "created_at": row["created_at"],
+            }), 200
+    except Exception:  # noqa: BLE001
+        logger.warning("Failed to load preset '%s' from database", name, exc_info=True)
+
+    return jsonify({"error": f"Preset '{name}' not found"}), 404

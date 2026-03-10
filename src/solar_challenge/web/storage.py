@@ -267,11 +267,21 @@ class RunStorage:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO runs (
+                INSERT INTO runs (
                     id, name, type, config_json, summary_json,
                     status, error_message, created_at, completed_at,
                     duration_seconds, n_homes, notes
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    type = excluded.type,
+                    config_json = excluded.config_json,
+                    summary_json = excluded.summary_json,
+                    status = excluded.status,
+                    error_message = excluded.error_message,
+                    completed_at = excluded.completed_at,
+                    duration_seconds = excluded.duration_seconds,
+                    n_homes = excluded.n_homes
                 """,
                 (
                     run_id,
@@ -426,11 +436,21 @@ class RunStorage:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT OR REPLACE INTO runs (
+                INSERT INTO runs (
                     id, name, type, config_json, summary_json,
                     status, error_message, created_at, completed_at,
                     duration_seconds, n_homes, notes
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    type = excluded.type,
+                    config_json = excluded.config_json,
+                    summary_json = excluded.summary_json,
+                    status = excluded.status,
+                    error_message = excluded.error_message,
+                    completed_at = excluded.completed_at,
+                    duration_seconds = excluded.duration_seconds,
+                    n_homes = excluded.n_homes
                 """,
                 (
                     run_id,
