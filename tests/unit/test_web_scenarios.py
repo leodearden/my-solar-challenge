@@ -228,8 +228,8 @@ class TestScenarioAPI:
 class TestSweepAPI:
     """Tests for the POST /api/simulate/sweep endpoint."""
 
-    def test_sweep_endpoint_returns_501(self, client: FlaskClient) -> None:
-        """Test POST /api/simulate/sweep returns 501 (not yet implemented)."""
+    def test_sweep_endpoint_returns_201(self, client: FlaskClient) -> None:
+        """Test POST /api/simulate/sweep returns 201 with job_ids."""
         response = client.post(
             "/api/simulate/sweep",
             json={
@@ -241,11 +241,13 @@ class TestSweepAPI:
                 "base_config": {"battery_kwh": 5.0, "location": "bristol", "days": 7},
             },
         )
-        assert response.status_code == 501
+        assert response.status_code == 201
         data = response.get_json()
         assert "values" in data
         assert len(data["values"]) == 4
         assert data["parameter"] == "pv_capacity_kw"
+        assert "job_ids" in data
+        assert len(data["job_ids"]) == 4
 
     def test_sweep_linear_values(self, client: FlaskClient) -> None:
         """Test that linear sweep generates evenly spaced values."""

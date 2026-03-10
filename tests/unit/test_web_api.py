@@ -639,8 +639,8 @@ class TestGetPreset:
 class TestSimulateSweep:
     """Tests for POST /api/simulate/sweep."""
 
-    def test_valid_linear_sweep_returns_501(self, client: FlaskClient) -> None:
-        """Linear sweep with valid params returns 501 (not yet implemented)."""
+    def test_valid_linear_sweep_returns_201(self, client: FlaskClient) -> None:
+        """Linear sweep with valid params returns 201 with job_ids."""
         resp = client.post(
             "/api/simulate/sweep",
             json={
@@ -651,30 +651,32 @@ class TestSimulateSweep:
                 "mode": "linear",
             },
         )
-        assert resp.status_code == 501
+        assert resp.status_code == 201
         data = resp.get_json()
-        assert "not yet implemented" in data["error"]
         assert data["parameter"] == "pv_capacity_kw"
         assert len(data["values"]) == 5
+        assert "job_ids" in data
+        assert len(data["job_ids"]) == 5
         # First and last values should match min/max
         assert data["values"][0] == pytest.approx(1.0, abs=0.01)
         assert data["values"][-1] == pytest.approx(10.0, abs=0.01)
 
-    def test_valid_geometric_sweep_returns_501(self, client: FlaskClient) -> None:
-        """Geometric sweep with valid params returns 501 (not yet implemented)."""
+    def test_valid_geometric_sweep_returns_201(self, client: FlaskClient) -> None:
+        """Geometric sweep with valid params returns 201 with job_ids."""
         resp = client.post(
             "/api/simulate/sweep",
             json={
-                "parameter": "battery_kwh",
+                "parameter": "battery_capacity_kwh",
                 "min": 1.0,
                 "max": 16.0,
                 "steps": 3,
                 "mode": "geometric",
             },
         )
-        assert resp.status_code == 501
+        assert resp.status_code == 201
         data = resp.get_json()
         assert len(data["values"]) == 3
+        assert "job_ids" in data
         assert data["values"][0] == pytest.approx(1.0, abs=0.01)
         assert data["values"][-1] == pytest.approx(16.0, abs=0.01)
 
@@ -745,7 +747,7 @@ class TestSimulateSweep:
             "/api/simulate/sweep",
             json={"min": 1.0, "max": 5.0, "steps": 2},
         )
-        assert resp.status_code == 501
+        assert resp.status_code == 201
         assert resp.get_json()["parameter"] == "pv_capacity_kw"
 
 
