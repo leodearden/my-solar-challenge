@@ -1,6 +1,5 @@
 """Flask Blueprint routes for the Solar Challenge web dashboard."""
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +18,9 @@ bp = Blueprint("main", __name__)
 
 
 def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
-    """Compute aggregate statistics across all simulation runs.
+    """Compute aggregate statistics across all completed simulation runs.
+
+    Uses SQL aggregate queries instead of loading all rows for O(1) performance.
 
     Args:
         storage: RunStorage instance to query.
@@ -27,22 +28,31 @@ def _get_aggregate_stats(storage: RunStorage) -> dict[str, Any]:
     Returns:
         Dict with total_runs, total_homes, and total_energy_mwh.
     """
-    all_runs = storage.list_runs()
-    total_runs = len(all_runs)
-    total_homes = 0
-    total_energy_kwh = 0.0
+    from solar_challenge.web.database import get_db  # noqa: PLC0415
 
-    for run in all_runs:
-        total_homes += run.get("n_homes", 1) or 1
-        summary_json = run.get("summary_json")
-        if summary_json:
-            try:
-                summary = json.loads(summary_json) if isinstance(summary_json, str) else summary_json
-                # Home runs have total_generation_kwh at top level
-                gen = summary.get("total_generation_kwh", 0) or 0
-                total_energy_kwh += float(gen)
-            except (json.JSONDecodeError, TypeError, ValueError):
-                pass
+    with get_db(storage.db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total_runs,
+                COALESCE(SUM(n_homes), 0) as total_homes
+            FROM runs
+            WHERE status = 'completed'
+        """)
+        row = cursor.fetchone()
+        total_runs = row["total_runs"]
+        total_homes = row["total_homes"]
+
+        # Get total energy from summary_json using json_extract
+        cursor.execute("""
+            SELECT COALESCE(SUM(
+                CAST(json_extract(summary_json, '$.total_generation_kwh') AS REAL)
+            ), 0.0) as total_energy_kwh
+            FROM runs
+            WHERE status = 'completed' AND summary_json IS NOT NULL
+        """)
+        energy_row = cursor.fetchone()
+        total_energy_kwh = energy_row["total_energy_kwh"]
 
     return {
         "total_runs": total_runs,

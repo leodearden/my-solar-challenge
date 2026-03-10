@@ -7,6 +7,7 @@ tracking via SQLite and SSE event queues.
 
 import collections
 import json
+import sqlite3
 import threading
 import time
 import traceback
@@ -344,6 +345,7 @@ class JobManager:
         message: str,
         db_path: str,
         status: str = "running",
+        conn: Any = None,
     ) -> None:
         """Update job progress in memory and SQLite, and append an SSE event.
 
@@ -354,6 +356,8 @@ class JobManager:
             message: Human-readable progress message.
             db_path: Path to the SQLite database file.
             status: Job status string.
+            conn: Optional existing SQLite connection. When provided, uses
+                it directly instead of opening a new connection.
         """
         # Update in-memory state
         with self._lock:
@@ -364,7 +368,7 @@ class JobManager:
                 self._jobs[job_id]["status"] = status
 
         # Update database
-        with get_db(db_path) as conn:
+        if conn is not None:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -377,6 +381,21 @@ class JobManager:
                 """,
                 (status, pct, step, message, job_id),
             )
+            conn.commit()
+        else:
+            with get_db(db_path) as fallback_conn:
+                cursor = fallback_conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE jobs SET
+                        status = ?,
+                        progress_pct = ?,
+                        current_step = ?,
+                        message = ?
+                    WHERE id = ?
+                    """,
+                    (status, pct, step, message, job_id),
+                )
 
         # Append SSE event
         event = {
@@ -427,27 +446,30 @@ class JobManager:
             created_at: Original creation timestamp from job submission.
         """
         start_time = time.monotonic()
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
         try:
             # Step 1: Update to running
-            self._update_progress(job_id, 5.0, "Starting", "Initializing simulation...", db_path, "running")
+            self._update_progress(job_id, 5.0, "Starting", "Initializing simulation...", db_path, "running", conn=conn)
 
-            with get_db(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?",
-                    (datetime.now(timezone.utc).isoformat(), job_id),
-                )
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), job_id),
+            )
+            conn.commit()
 
             # Step 2: Run simulation
-            self._update_progress(job_id, 20.0, "Simulating", "Running home simulation...", db_path)
+            self._update_progress(job_id, 20.0, "Simulating", "Running home simulation...", db_path, conn=conn)
             results = simulate_home(config, start_date, end_date)
 
             # Step 3: Calculate summary
-            self._update_progress(job_id, 80.0, "Summarizing", "Calculating summary statistics...", db_path)
+            self._update_progress(job_id, 80.0, "Summarizing", "Calculating summary statistics...", db_path, conn=conn)
             summary = calculate_summary(results)
 
             # Step 4: Save results (upserts the placeholder run row)
-            self._update_progress(job_id, 90.0, "Saving", "Persisting results to storage...", db_path)
+            self._update_progress(job_id, 90.0, "Saving", "Persisting results to storage...", db_path, conn=conn)
             storage = RunStorage(db_path=db_path, data_dir=data_dir)
 
             duration = time.monotonic() - start_time
@@ -464,20 +486,20 @@ class JobManager:
 
             # Step 5: Update job to completed
             completed_at = datetime.now(timezone.utc).isoformat()
-            with get_db(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    UPDATE jobs SET
-                        status = 'completed',
-                        progress_pct = 100.0,
-                        current_step = 'Done',
-                        message = 'Simulation completed successfully',
-                        completed_at = ?
-                    WHERE id = ?
-                    """,
-                    (completed_at, job_id),
-                )
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE jobs SET
+                    status = 'completed',
+                    progress_pct = 100.0,
+                    current_step = 'Done',
+                    message = 'Simulation completed successfully',
+                    completed_at = ?
+                WHERE id = ?
+                """,
+                (completed_at, job_id),
+            )
+            conn.commit()
 
             # Update in-memory state
             with self._lock:
@@ -503,29 +525,29 @@ class JobManager:
             error_msg = str(exc)
             completed_at = datetime.now(timezone.utc).isoformat()
 
-            with get_db(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    UPDATE jobs SET
-                        status = 'failed',
-                        message = ?,
-                        error_traceback = ?,
-                        completed_at = ?
-                    WHERE id = ?
-                    """,
-                    (error_msg, error_tb, completed_at, job_id),
-                )
-                cursor.execute(
-                    """
-                    UPDATE runs SET
-                        status = 'failed',
-                        error_message = ?,
-                        completed_at = ?
-                    WHERE id = ?
-                    """,
-                    (error_msg, completed_at, run_id),
-                )
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE jobs SET
+                    status = 'failed',
+                    message = ?,
+                    error_traceback = ?,
+                    completed_at = ?
+                WHERE id = ?
+                """,
+                (error_msg, error_tb, completed_at, job_id),
+            )
+            cursor.execute(
+                """
+                UPDATE runs SET
+                    status = 'failed',
+                    error_message = ?,
+                    completed_at = ?
+                WHERE id = ?
+                """,
+                (error_msg, completed_at, run_id),
+            )
+            conn.commit()
 
             # Update in-memory state
             with self._lock:
@@ -542,6 +564,8 @@ class JobManager:
                             "message": error_msg,
                         },
                     })
+        finally:
+            conn.close()
 
     def _run_fleet_simulation(
         self,
@@ -574,16 +598,19 @@ class JobManager:
         from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 
         start_time = time.monotonic()
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
         try:
             # Update to running
-            self._update_progress(job_id, 5.0, "Starting", "Initializing fleet simulation...", db_path, "running")
+            self._update_progress(job_id, 5.0, "Starting", "Initializing fleet simulation...", db_path, "running", conn=conn)
 
-            with get_db(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?",
-                    (datetime.now(timezone.utc).isoformat(), job_id),
-                )
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), job_id),
+            )
+            conn.commit()
 
             # Simulate each home
             total = len(configs)
@@ -597,6 +624,7 @@ class JobManager:
                     f"Home {i + 1}/{total}",
                     f"Simulating home {i + 1} of {total}...",
                     db_path,
+                    conn=conn,
                 )
 
                 results = simulate_home(home_config, start_date, end_date)
@@ -605,7 +633,7 @@ class JobManager:
                 per_home_summaries.append(summary)
 
             # Aggregate results
-            self._update_progress(job_id, 95.0, "Aggregating", "Aggregating fleet results...", db_path)
+            self._update_progress(job_id, 95.0, "Aggregating", "Aggregating fleet results...", db_path, conn=conn)
 
             fleet_results = FleetResults(
                 per_home_results=per_home_results,
@@ -616,7 +644,7 @@ class JobManager:
             fleet_summary = calculate_fleet_summary(fleet_results)
 
             # Save results (upserts the placeholder run row)
-            self._update_progress(job_id, 97.0, "Saving", "Persisting fleet results...", db_path)
+            self._update_progress(job_id, 97.0, "Saving", "Persisting fleet results...", db_path, conn=conn)
             storage = RunStorage(db_path=db_path, data_dir=data_dir)
 
             duration = time.monotonic() - start_time
@@ -633,20 +661,20 @@ class JobManager:
 
             # Update job to completed
             completed_at = datetime.now(timezone.utc).isoformat()
-            with get_db(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    UPDATE jobs SET
-                        status = 'completed',
-                        progress_pct = 100.0,
-                        current_step = 'Done',
-                        message = 'Fleet simulation completed successfully',
-                        completed_at = ?
-                    WHERE id = ?
-                    """,
-                    (completed_at, job_id),
-                )
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE jobs SET
+                    status = 'completed',
+                    progress_pct = 100.0,
+                    current_step = 'Done',
+                    message = 'Fleet simulation completed successfully',
+                    completed_at = ?
+                WHERE id = ?
+                """,
+                (completed_at, job_id),
+            )
+            conn.commit()
 
             # Update in-memory state
             with self._lock:
@@ -671,29 +699,29 @@ class JobManager:
             error_msg = str(exc)
             completed_at = datetime.now(timezone.utc).isoformat()
 
-            with get_db(db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    UPDATE jobs SET
-                        status = 'failed',
-                        message = ?,
-                        error_traceback = ?,
-                        completed_at = ?
-                    WHERE id = ?
-                    """,
-                    (error_msg, error_tb, completed_at, job_id),
-                )
-                cursor.execute(
-                    """
-                    UPDATE runs SET
-                        status = 'failed',
-                        error_message = ?,
-                        completed_at = ?
-                    WHERE id = ?
-                    """,
-                    (error_msg, completed_at, run_id),
-                )
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE jobs SET
+                    status = 'failed',
+                    message = ?,
+                    error_traceback = ?,
+                    completed_at = ?
+                WHERE id = ?
+                """,
+                (error_msg, error_tb, completed_at, job_id),
+            )
+            cursor.execute(
+                """
+                UPDATE runs SET
+                    status = 'failed',
+                    error_message = ?,
+                    completed_at = ?
+                WHERE id = ?
+                """,
+                (error_msg, completed_at, run_id),
+            )
+            conn.commit()
 
             # Update in-memory state
             with self._lock:
@@ -710,6 +738,8 @@ class JobManager:
                             "message": error_msg,
                         },
                     })
+        finally:
+            conn.close()
 
 
 def recover_stale_jobs(db_path: str | Path) -> int:
