@@ -14,6 +14,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Callable
 from typing import Any, Generator
 
 from concurrent.futures import ThreadPoolExecutor
@@ -411,6 +412,98 @@ class JobManager:
             if job_id in self._event_queues:
                 self._event_queues[job_id].append(event)
 
+    def _run_job(
+        self,
+        job_id: str,
+        run_id: str,
+        db_path: str,
+        work_fn: Callable[[sqlite3.Connection, Callable[[float, str, str], None]], None],
+        success_message: str = "Simulation completed successfully",
+    ) -> None:
+        """Common job lifecycle wrapper.
+
+        Handles: DB connection management, status transitions
+        (queued -> running -> completed/failed), progress tracking,
+        SSE events, and error handling.
+
+        Args:
+            job_id: Unique job identifier.
+            run_id: Unique run identifier.
+            db_path: Path to the SQLite database file.
+            work_fn: Callable receiving (conn, progress_callback) that
+                performs the actual simulation work.
+            success_message: Message stored on successful completion.
+        """
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        try:
+            # Transition to running
+            self._update_progress(job_id, 5.0, "Starting", "Initializing...", db_path, "running", conn=conn)
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?",
+                (datetime.now(timezone.utc).isoformat(), job_id),
+            )
+            conn.commit()
+
+            # Execute the actual work
+            def progress_callback(pct: float, step: str, message: str) -> None:
+                self._update_progress(job_id, pct, step, message, db_path, conn=conn)
+
+            work_fn(conn, progress_callback)
+
+            # Mark completed
+            completed_at = datetime.now(timezone.utc).isoformat()
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE jobs SET status = 'completed', progress_pct = 100.0,
+                   current_step = 'Done', message = ?, completed_at = ? WHERE id = ?""",
+                (success_message, completed_at, job_id),
+            )
+            conn.commit()
+
+            with self._lock:
+                if job_id in self._jobs:
+                    self._jobs[job_id].update({
+                        "status": "completed", "progress_pct": 100.0,
+                        "current_step": "Done", "message": success_message,
+                    })
+                if job_id in self._event_queues:
+                    self._event_queues[job_id].append({
+                        "event": "complete",
+                        "data": {"status": "completed", "run_id": run_id},
+                    })
+
+        except Exception as exc:
+            error_tb = traceback.format_exc()
+            error_msg = str(exc)
+            completed_at = datetime.now(timezone.utc).isoformat()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE jobs SET status='failed', message=?, error_traceback=?, completed_at=? WHERE id=?",
+                    (error_msg, error_tb, completed_at, job_id),
+                )
+                cursor.execute(
+                    "UPDATE runs SET status='failed', error_message=?, completed_at=? WHERE id=?",
+                    (error_msg, completed_at, run_id),
+                )
+                conn.commit()
+            except Exception:
+                pass  # DB update failed, but we still update in-memory
+
+            with self._lock:
+                if job_id in self._jobs:
+                    self._jobs[job_id].update({"status": "failed", "message": error_msg})
+                if job_id in self._event_queues:
+                    self._event_queues[job_id].append({
+                        "event": "error",
+                        "data": {"status": "failed", "message": error_msg},
+                    })
+        finally:
+            conn.close()
+
     def _run_home_simulation(
         self,
         job_id: str,
@@ -425,14 +518,9 @@ class JobManager:
     ) -> None:
         """Worker function that runs a home simulation in a background thread.
 
-        Steps:
-        1. Update job status to 'running'
-        2. Call simulate_home()
-        3. Call calculate_summary()
-        4. Save via RunStorage.save_home_run() (upserts the placeholder row)
-        5. Update job status to 'completed'
-
-        On exception: update status to 'failed' and capture traceback.
+        Delegates lifecycle management to ``_run_job`` and focuses on the
+        simulation-specific logic: running the simulation, calculating
+        summary statistics, and persisting results via RunStorage.
 
         Args:
             job_id: Unique job identifier.
@@ -445,34 +533,18 @@ class JobManager:
             name: Optional name for the simulation run.
             created_at: Original creation timestamp from job submission.
         """
-        start_time = time.monotonic()
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        try:
-            # Step 1: Update to running
-            self._update_progress(job_id, 5.0, "Starting", "Initializing simulation...", db_path, "running", conn=conn)
+        start_ref = time.monotonic()
 
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?",
-                (datetime.now(timezone.utc).isoformat(), job_id),
-            )
-            conn.commit()
-
-            # Step 2: Run simulation
-            self._update_progress(job_id, 20.0, "Simulating", "Running home simulation...", db_path, conn=conn)
+        def work(conn: sqlite3.Connection, progress: Callable[[float, str, str], None]) -> None:
+            progress(20.0, "Simulating", "Running home simulation...")
             results = simulate_home(config, start_date, end_date)
 
-            # Step 3: Calculate summary
-            self._update_progress(job_id, 80.0, "Summarizing", "Calculating summary statistics...", db_path, conn=conn)
+            progress(80.0, "Summarizing", "Calculating summary statistics...")
             summary = calculate_summary(results)
 
-            # Step 4: Save results (upserts the placeholder run row)
-            self._update_progress(job_id, 90.0, "Saving", "Persisting results to storage...", db_path, conn=conn)
+            progress(90.0, "Saving", "Persisting results to storage...")
             storage = RunStorage(db_path=db_path, data_dir=data_dir)
-
-            duration = time.monotonic() - start_time
+            duration = time.monotonic() - start_ref
             storage.save_home_run(
                 run_id=run_id,
                 config=config,
@@ -484,88 +556,7 @@ class JobManager:
                 created_at=created_at,
             )
 
-            # Step 5: Update job to completed
-            completed_at = datetime.now(timezone.utc).isoformat()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                UPDATE jobs SET
-                    status = 'completed',
-                    progress_pct = 100.0,
-                    current_step = 'Done',
-                    message = 'Simulation completed successfully',
-                    completed_at = ?
-                WHERE id = ?
-                """,
-                (completed_at, job_id),
-            )
-            conn.commit()
-
-            # Update in-memory state
-            with self._lock:
-                if job_id in self._jobs:
-                    self._jobs[job_id]["status"] = "completed"
-                    self._jobs[job_id]["progress_pct"] = 100.0
-                    self._jobs[job_id]["current_step"] = "Done"
-                    self._jobs[job_id]["message"] = "Simulation completed successfully"
-
-                # Append completion SSE event
-                if job_id in self._event_queues:
-                    self._event_queues[job_id].append({
-                        "event": "complete",
-                        "data": {
-                            "status": "completed",
-                            "run_id": run_id,
-                        },
-                    })
-
-        except Exception as exc:
-            # Update job and run to failed
-            error_tb = traceback.format_exc()
-            error_msg = str(exc)
-            completed_at = datetime.now(timezone.utc).isoformat()
-
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                UPDATE jobs SET
-                    status = 'failed',
-                    message = ?,
-                    error_traceback = ?,
-                    completed_at = ?
-                WHERE id = ?
-                """,
-                (error_msg, error_tb, completed_at, job_id),
-            )
-            cursor.execute(
-                """
-                UPDATE runs SET
-                    status = 'failed',
-                    error_message = ?,
-                    completed_at = ?
-                WHERE id = ?
-                """,
-                (error_msg, completed_at, run_id),
-            )
-            conn.commit()
-
-            # Update in-memory state
-            with self._lock:
-                if job_id in self._jobs:
-                    self._jobs[job_id]["status"] = "failed"
-                    self._jobs[job_id]["message"] = error_msg
-
-                # Append failure SSE event
-                if job_id in self._event_queues:
-                    self._event_queues[job_id].append({
-                        "event": "error",
-                        "data": {
-                            "status": "failed",
-                            "message": error_msg,
-                        },
-                    })
-        finally:
-            conn.close()
+        self._run_job(job_id, run_id, db_path, work, "Simulation completed successfully")
 
     def _run_fleet_simulation(
         self,
@@ -581,8 +572,9 @@ class JobManager:
     ) -> None:
         """Worker function that runs a fleet simulation in a background thread.
 
-        Iterates through home configs, simulates each one, reports progress,
-        and saves aggregated results.
+        Delegates lifecycle management to ``_run_job`` and focuses on the
+        fleet-specific logic: iterating homes, aggregating results, and
+        persisting via RunStorage.
 
         Args:
             job_id: Unique job identifier.
@@ -597,57 +589,31 @@ class JobManager:
         """
         from solar_challenge.fleet import FleetResults, calculate_fleet_summary
 
-        start_time = time.monotonic()
-        conn = sqlite3.connect(str(db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        try:
-            # Update to running
-            self._update_progress(job_id, 5.0, "Starting", "Initializing fleet simulation...", db_path, "running", conn=conn)
+        start_ref = time.monotonic()
 
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE jobs SET status = 'running', started_at = ? WHERE id = ?",
-                (datetime.now(timezone.utc).isoformat(), job_id),
-            )
-            conn.commit()
-
-            # Simulate each home
+        def work(conn: sqlite3.Connection, progress: Callable[[float, str, str], None]) -> None:
             total = len(configs)
             per_home_results: list[SimulationResults] = []
             per_home_summaries: list[SummaryStatistics] = []
 
             for i, home_config in enumerate(configs):
                 pct = (i / total) * 90.0 + 5.0  # 5% to 95%
-                self._update_progress(
-                    job_id, pct,
-                    f"Home {i + 1}/{total}",
-                    f"Simulating home {i + 1} of {total}...",
-                    db_path,
-                    conn=conn,
-                )
-
+                progress(pct, f"Home {i + 1}/{total}", f"Simulating home {i + 1} of {total}...")
                 results = simulate_home(home_config, start_date, end_date)
                 summary = calculate_summary(results)
                 per_home_results.append(results)
                 per_home_summaries.append(summary)
 
-            # Aggregate results
-            self._update_progress(job_id, 95.0, "Aggregating", "Aggregating fleet results...", db_path, conn=conn)
-
+            progress(95.0, "Aggregating", "Aggregating fleet results...")
             fleet_results = FleetResults(
                 per_home_results=per_home_results,
                 home_configs=configs,
             )
-
-            # Calculate fleet summary using the proper function
             fleet_summary = calculate_fleet_summary(fleet_results)
 
-            # Save results (upserts the placeholder run row)
-            self._update_progress(job_id, 97.0, "Saving", "Persisting fleet results...", db_path, conn=conn)
+            progress(97.0, "Saving", "Persisting fleet results...")
             storage = RunStorage(db_path=db_path, data_dir=data_dir)
-
-            duration = time.monotonic() - start_time
+            duration = time.monotonic() - start_ref
             storage.save_fleet_run(
                 run_id=run_id,
                 fleet_results=fleet_results,
@@ -659,87 +625,7 @@ class JobManager:
                 created_at=created_at,
             )
 
-            # Update job to completed
-            completed_at = datetime.now(timezone.utc).isoformat()
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                UPDATE jobs SET
-                    status = 'completed',
-                    progress_pct = 100.0,
-                    current_step = 'Done',
-                    message = 'Fleet simulation completed successfully',
-                    completed_at = ?
-                WHERE id = ?
-                """,
-                (completed_at, job_id),
-            )
-            conn.commit()
-
-            # Update in-memory state
-            with self._lock:
-                if job_id in self._jobs:
-                    self._jobs[job_id]["status"] = "completed"
-                    self._jobs[job_id]["progress_pct"] = 100.0
-                    self._jobs[job_id]["current_step"] = "Done"
-                    self._jobs[job_id]["message"] = "Fleet simulation completed successfully"
-
-                # Append completion SSE event
-                if job_id in self._event_queues:
-                    self._event_queues[job_id].append({
-                        "event": "complete",
-                        "data": {
-                            "status": "completed",
-                            "run_id": run_id,
-                        },
-                    })
-
-        except Exception as exc:
-            error_tb = traceback.format_exc()
-            error_msg = str(exc)
-            completed_at = datetime.now(timezone.utc).isoformat()
-
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                UPDATE jobs SET
-                    status = 'failed',
-                    message = ?,
-                    error_traceback = ?,
-                    completed_at = ?
-                WHERE id = ?
-                """,
-                (error_msg, error_tb, completed_at, job_id),
-            )
-            cursor.execute(
-                """
-                UPDATE runs SET
-                    status = 'failed',
-                    error_message = ?,
-                    completed_at = ?
-                WHERE id = ?
-                """,
-                (error_msg, completed_at, run_id),
-            )
-            conn.commit()
-
-            # Update in-memory state
-            with self._lock:
-                if job_id in self._jobs:
-                    self._jobs[job_id]["status"] = "failed"
-                    self._jobs[job_id]["message"] = error_msg
-
-                # Append failure SSE event
-                if job_id in self._event_queues:
-                    self._event_queues[job_id].append({
-                        "event": "error",
-                        "data": {
-                            "status": "failed",
-                            "message": error_msg,
-                        },
-                    })
-        finally:
-            conn.close()
+        self._run_job(job_id, run_id, db_path, work, "Fleet simulation completed successfully")
 
 
 def recover_stale_jobs(db_path: str | Path) -> int:
